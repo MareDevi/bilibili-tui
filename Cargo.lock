@@ -109,11 +109,14 @@ dependencies = [
  "anyhow",
  "color-eyre",
  "crossterm 0.29.0",
+ "qrcode",
  "ratatui",
  "reqwest",
  "serde",
  "serde_json",
+ "tokio",
  "tui-big-text",
+ "tui-qrcode",
 ]
 
 [[package]]
@@ -1530,6 +1533,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1582,7 +1591,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2439,9 +2448,23 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af407857209536a95c8e56f8231ef2c2e2aff839b22e07a1ffcbc617e9db9fa5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.112",
 ]
 
 [[package]]
@@ -2568,6 +2591,17 @@ dependencies = [
  "derive_builder",
  "font8x8",
  "itertools 0.14.0",
+ "ratatui-core",
+]
+
+[[package]]
+name = "tui-qrcode"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58f655a1caed301ef718cf24a83373e3c4840e2d51b91c266925284f17327fbe"
+dependencies = [
+ "color-eyre",
+ "qrcode",
  "ratatui-core",
 ]
 
