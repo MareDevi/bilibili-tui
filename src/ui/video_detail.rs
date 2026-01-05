@@ -1,6 +1,7 @@
 //! Video detail page showing video info, comments, and related videos
 
-use super::Component;
+use super::video_card::{VideoCard, VideoCardGrid};
+use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::comment::CommentItem;
 use crate::api::video::{RelatedVideoItem, VideoInfo};
@@ -19,6 +20,7 @@ pub struct VideoDetailPage {
     pub video_info: Option<VideoInfo>,
     pub comments: Vec<CommentItem>,
     pub related_videos: Vec<RelatedVideoItem>,
+    pub related_card_grid: VideoCardGrid,
     pub loading: bool,
     pub error_message: Option<String>,
     pub comment_page: i32,
@@ -26,16 +28,22 @@ pub struct VideoDetailPage {
     pub related_scroll: usize,
     pub focus: DetailFocus,
     pub has_more_comments: bool,
+    pub loading_more_comments: bool,
 }
 
 impl VideoDetailPage {
     pub fn new(bvid: String, aid: i64) -> Self {
+        let mut related_card_grid = VideoCardGrid::new();
+        related_card_grid.columns = 2; // Two columns for compact layout
+        related_card_grid.card_height = 8; // Compact cards for sidebar
+
         Self {
             bvid,
             aid,
             video_info: None,
             comments: Vec::new(),
             related_videos: Vec::new(),
+            related_card_grid,
             loading: true,
             error_message: None,
             comment_page: 1,
@@ -43,6 +51,7 @@ impl VideoDetailPage {
             related_scroll: 0,
             focus: DetailFocus::Comments,
             has_more_comments: true,
+            loading_more_comments: false,
         }
     }
 
@@ -79,7 +88,21 @@ impl VideoDetailPage {
         // Load related videos
         match api_client.get_related_videos(&self.bvid).await {
             Ok(videos) => {
-                self.related_videos = videos;
+                self.related_videos = videos.clone();
+                // Populate video card grid
+                self.related_card_grid.clear();
+                for video in &videos {
+                    let card = VideoCard::new(
+                        video.bvid.clone(),
+                        video.aid,
+                        video.title.clone().unwrap_or_else(|| "无标题".to_string()),
+                        video.author_name().to_string(),
+                        video.format_views(),
+                        video.format_duration(),
+                        video.cover_url(),
+                    );
+                    self.related_card_grid.add_card(card);
+                }
             }
             Err(e) => {
                 if self.error_message.is_none() {
@@ -92,10 +115,11 @@ impl VideoDetailPage {
     }
 
     pub async fn load_more_comments(&mut self, api_client: &ApiClient) {
-        if !self.has_more_comments {
+        if !self.has_more_comments || self.loading_more_comments {
             return;
         }
 
+        self.loading_more_comments = true;
         self.comment_page += 1;
         match api_client.get_comments(self.aid, self.comment_page).await {
             Ok(data) => {
@@ -113,16 +137,35 @@ impl VideoDetailPage {
                 self.comment_page -= 1;
             }
         }
+        self.loading_more_comments = false;
     }
 
-    fn render_video_info(&self, frame: &mut Frame, area: Rect) {
+    /// Poll for completed related video cover downloads
+    pub fn poll_cover_results(&mut self) {
+        self.related_card_grid.poll_cover_results();
+    }
+
+    /// Start background downloads for visible related video covers
+    pub fn start_cover_downloads(&mut self) {
+        self.related_card_grid.start_cover_downloads();
+    }
+
+    /// Check if scrolling near bottom of comments
+    fn is_near_comments_bottom(&self, visible_count: usize) -> bool {
+        if self.comments.is_empty() {
+            return false;
+        }
+        self.comment_scroll + visible_count >= self.comments.len().saturating_sub(2)
+    }
+
+    fn render_video_info(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(60, 60, 60)))
+            .border_style(Style::default().fg(theme.border_unfocused))
             .title(Span::styled(
                 " 📹 视频信息 ",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.fg_accent),
             ));
 
         let inner = block.inner(area);
@@ -142,42 +185,42 @@ impl VideoDetailPage {
             // Title
             let title = Paragraph::new(info.title.clone()).style(
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme.fg_primary)
                     .add_modifier(Modifier::BOLD),
             );
             frame.render_widget(title, chunks[0]);
 
             // Author
             let author = Paragraph::new(format!("UP: {}", info.owner.name))
-                .style(Style::default().fg(Color::Rgb(251, 114, 153)));
+                .style(Style::default().fg(theme.bilibili_pink));
             frame.render_widget(author, chunks[1]);
 
             // Stats
             let stats = Paragraph::new(Line::from(vec![
-                Span::styled("▶ ", Style::default().fg(Color::Rgb(80, 80, 80))),
+                Span::styled("▶ ", Style::default().fg(theme.fg_secondary)),
                 Span::styled(
                     info.stat.format_views(),
-                    Style::default().fg(Color::Rgb(150, 150, 150)),
+                    Style::default().fg(theme.fg_secondary),
                 ),
-                Span::styled(" · 💬 ", Style::default().fg(Color::Rgb(80, 80, 80))),
+                Span::styled(" · 💬 ", Style::default().fg(theme.fg_secondary)),
                 Span::styled(
                     info.stat.format_danmaku(),
-                    Style::default().fg(Color::Rgb(150, 150, 150)),
+                    Style::default().fg(theme.fg_secondary),
                 ),
-                Span::styled(" · 👍 ", Style::default().fg(Color::Rgb(80, 80, 80))),
+                Span::styled(" · 👍 ", Style::default().fg(theme.fg_secondary)),
                 Span::styled(
                     info.stat.format_like(),
-                    Style::default().fg(Color::Rgb(150, 150, 150)),
+                    Style::default().fg(theme.fg_secondary),
                 ),
-                Span::styled(" · 💰 ", Style::default().fg(Color::Rgb(80, 80, 80))),
+                Span::styled(" · 💰 ", Style::default().fg(theme.fg_secondary)),
                 Span::styled(
                     info.stat.format_coin(),
-                    Style::default().fg(Color::Rgb(150, 150, 150)),
+                    Style::default().fg(theme.fg_secondary),
                 ),
-                Span::styled(" · ⭐ ", Style::default().fg(Color::Rgb(80, 80, 80))),
+                Span::styled(" · ⭐ ", Style::default().fg(theme.fg_secondary)),
                 Span::styled(
                     info.stat.format_favorite(),
-                    Style::default().fg(Color::Rgb(150, 150, 150)),
+                    Style::default().fg(theme.fg_secondary),
                 ),
             ]));
             frame.render_widget(stats, chunks[2]);
@@ -191,24 +234,24 @@ impl VideoDetailPage {
                     desc.clone()
                 };
                 let description = Paragraph::new(desc_text)
-                    .style(Style::default().fg(Color::Rgb(120, 120, 120)))
+                    .style(Style::default().fg(theme.fg_secondary))
                     .wrap(Wrap { trim: true });
                 frame.render_widget(description, chunks[3]);
             }
         } else {
             let loading = Paragraph::new("加载中...")
-                .style(Style::default().fg(Color::Yellow))
+                .style(Style::default().fg(theme.warning))
                 .alignment(Alignment::Center);
             frame.render_widget(loading, inner);
         }
     }
 
-    fn render_comments(&self, frame: &mut Frame, area: Rect) {
+    fn render_comments(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let is_focused = self.focus == DetailFocus::Comments;
         let border_style = if is_focused {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(theme.border_focused)
         } else {
-            Style::default().fg(Color::Rgb(60, 60, 60))
+            Style::default().fg(theme.border_unfocused)
         };
 
         let block = Block::default()
@@ -218,9 +261,9 @@ impl VideoDetailPage {
             .title(Span::styled(
                 format!(" 💬 评论 ({}) ", self.comments.len()),
                 Style::default().fg(if is_focused {
-                    Color::Cyan
+                    theme.fg_accent
                 } else {
-                    Color::Rgb(150, 150, 150)
+                    theme.fg_secondary
                 }),
             ));
 
@@ -229,7 +272,7 @@ impl VideoDetailPage {
 
         if self.comments.is_empty() {
             let empty = Paragraph::new("暂无评论")
-                .style(Style::default().fg(Color::Rgb(100, 100, 100)))
+                .style(Style::default().fg(theme.fg_secondary))
                 .alignment(Alignment::Center);
             frame.render_widget(empty, inner);
             return;
@@ -249,16 +292,16 @@ impl VideoDetailPage {
                     Line::from(vec![
                         Span::styled(
                             comment.author_name(),
-                            Style::default().fg(Color::Rgb(251, 114, 153)),
+                            Style::default().fg(theme.bilibili_pink),
                         ),
                         Span::styled(
                             format!("  {}", comment.format_time()),
-                            Style::default().fg(Color::Rgb(80, 80, 80)),
+                            Style::default().fg(theme.fg_secondary),
                         ),
                     ]),
                     Line::from(vec![Span::styled(
                         truncate_str(comment.message(), 60),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme.fg_primary),
                     )]),
                     Line::from(vec![Span::styled(
                         format!(
@@ -266,7 +309,7 @@ impl VideoDetailPage {
                             comment.format_like(),
                             comment.reply_count()
                         ),
-                        Style::default().fg(Color::Rgb(80, 80, 80)),
+                        Style::default().fg(theme.fg_secondary),
                     )]),
                 ];
                 ListItem::new(lines)
@@ -277,12 +320,12 @@ impl VideoDetailPage {
         frame.render_widget(list, inner);
     }
 
-    fn render_related(&self, frame: &mut Frame, area: Rect) {
+    fn render_related(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let is_focused = self.focus == DetailFocus::Related;
         let border_style = if is_focused {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(theme.border_focused)
         } else {
-            Style::default().fg(Color::Rgb(60, 60, 60))
+            Style::default().fg(theme.border_unfocused)
         };
 
         let block = Block::default()
@@ -290,64 +333,35 @@ impl VideoDetailPage {
             .border_type(BorderType::Rounded)
             .border_style(border_style)
             .title(Span::styled(
-                format!(" 📺 相关推荐 ({}) ", self.related_videos.len()),
+                format!(" 📺 相关推荐 ({}) ", self.related_card_grid.cards.len()),
                 Style::default().fg(if is_focused {
-                    Color::Cyan
+                    theme.fg_accent
                 } else {
-                    Color::Rgb(150, 150, 150)
+                    theme.fg_secondary
                 }),
             ));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        if self.related_videos.is_empty() {
+        if self.related_card_grid.cards.is_empty() {
             let empty = Paragraph::new("暂无相关视频")
-                .style(Style::default().fg(Color::Rgb(100, 100, 100)))
+                .style(Style::default().fg(theme.fg_secondary))
                 .alignment(Alignment::Center);
             frame.render_widget(empty, inner);
             return;
         }
 
-        let visible_count = inner.height as usize;
+        // Sync scroll position with grid
+        self.related_card_grid.selected_index = self.related_scroll;
 
-        let items: Vec<ListItem> = self
-            .related_videos
-            .iter()
-            .enumerate()
-            .skip(self.related_scroll)
-            .take(visible_count)
-            .map(|(i, video)| {
-                let is_selected = is_focused && i == self.related_scroll;
-                let style = if is_selected {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                let prefix = if is_selected { "▶ " } else { "  " };
-                let title = video.title.as_deref().unwrap_or("无标题");
-                let display_title = truncate_str(title, 30);
-
-                ListItem::new(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(display_title, style),
-                    Span::styled(
-                        format!("  {} · {}", video.author_name(), video.format_views()),
-                        Style::default().fg(Color::Rgb(100, 100, 100)),
-                    ),
-                ]))
-            })
-            .collect();
-
-        let list = List::new(items);
-        frame.render_widget(list, inner);
+        // Render the video card grid
+        self.related_card_grid.render(frame, inner, theme);
     }
 }
 
 impl Component for VideoDetailPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -358,11 +372,11 @@ impl Component for VideoDetailPage {
             .split(area);
 
         // Video info
-        self.render_video_info(frame, chunks[0]);
+        self.render_video_info(frame, chunks[0], theme);
 
         if self.loading {
             let loading = Paragraph::new("⏳ 加载中...")
-                .style(Style::default().fg(Color::Yellow))
+                .style(Style::default().fg(theme.warning))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
@@ -372,7 +386,7 @@ impl Component for VideoDetailPage {
             frame.render_widget(loading, chunks[1]);
         } else if let Some(ref error) = self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme.error))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
@@ -390,14 +404,14 @@ impl Component for VideoDetailPage {
                 ])
                 .split(chunks[1]);
 
-            self.render_comments(frame, content_chunks[0]);
-            self.render_related(frame, content_chunks[1]);
+            self.render_comments(frame, content_chunks[0], theme);
+            self.render_related(frame, content_chunks[1], theme);
         }
 
         // Help
         let help_text = "[j/k] 滚动  [Tab] 切换焦点  [Enter] 选择相关视频  [p] 播放  [q/Esc] 返回";
         let help = Paragraph::new(help_text)
-            .style(Style::default().fg(Color::Rgb(80, 80, 80)))
+            .style(Style::default().fg(theme.fg_secondary))
             .alignment(Alignment::Center);
         frame.render_widget(help, chunks[2]);
     }
@@ -419,10 +433,17 @@ impl Component for VideoDetailPage {
                         if self.comment_scroll + 1 < self.comments.len() {
                             self.comment_scroll += 1;
                         }
+                        // Check if near bottom to load more comments
+                        if self.is_near_comments_bottom(10)
+                            && self.has_more_comments
+                            && !self.loading_more_comments
+                        {
+                            return Some(AppAction::LoadMoreComments);
+                        }
                     }
                     DetailFocus::Related => {
-                        if self.related_scroll + 1 < self.related_videos.len() {
-                            self.related_scroll += 1;
+                        if self.related_card_grid.move_down() {
+                            self.related_scroll = self.related_card_grid.selected_index;
                         }
                     }
                 }
@@ -436,8 +457,8 @@ impl Component for VideoDetailPage {
                         }
                     }
                     DetailFocus::Related => {
-                        if self.related_scroll > 0 {
-                            self.related_scroll -= 1;
+                        if self.related_card_grid.move_up() {
+                            self.related_scroll = self.related_card_grid.selected_index;
                         }
                     }
                 }
@@ -445,9 +466,9 @@ impl Component for VideoDetailPage {
             }
             KeyCode::Enter => {
                 if self.focus == DetailFocus::Related {
-                    if let Some(video) = self.related_videos.get(self.related_scroll) {
-                        if let Some(ref bvid) = video.bvid {
-                            let aid = video.aid.unwrap_or(0);
+                    if let Some(card) = self.related_card_grid.selected_card() {
+                        if let Some(ref bvid) = card.bvid {
+                            let aid = card.aid.unwrap_or(0);
                             return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
                         }
                     }

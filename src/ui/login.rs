@@ -1,6 +1,6 @@
 //! Login page with QR code display
 
-use super::Component;
+use super::{Component, Theme};
 use crate::api::auth::{QrcodeData, QrcodePollStatus};
 use crate::api::client::ApiClient;
 use crate::app::AppAction;
@@ -91,13 +91,13 @@ impl LoginPage {
         None
     }
 
-    fn status_text(&self) -> (&str, Color) {
+    fn status_text(&self, theme: &Theme) -> (&str, Color) {
         match self.poll_status {
-            QrcodePollStatus::Waiting => ("⏳ 等待扫描二维码...", Color::Yellow),
-            QrcodePollStatus::Scanned => ("📱 已扫描，请在手机上确认登录", Color::Cyan),
-            QrcodePollStatus::Success => ("✅ 登录成功！", Color::Green),
-            QrcodePollStatus::Expired => ("❌ 二维码已过期，请按 r 刷新", Color::Red),
-            QrcodePollStatus::Unknown(_) => ("❓ 未知状态", Color::Rgb(100, 100, 100)),
+            QrcodePollStatus::Waiting => ("⏳ 等待扫描二维码...", theme.warning),
+            QrcodePollStatus::Scanned => ("📱 已扫描，请在手机上确认登录", theme.info),
+            QrcodePollStatus::Success => ("✅ 登录成功！", theme.success),
+            QrcodePollStatus::Expired => ("❌ 二维码已过期，请按 r 刷新", theme.error),
+            QrcodePollStatus::Unknown(_) => ("❓ 未知状态", theme.fg_secondary),
         }
     }
 }
@@ -109,7 +109,7 @@ impl Default for LoginPage {
 }
 
 impl Component for LoginPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Layout: title, QR code, status, help
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -148,7 +148,7 @@ impl Component for LoginPage {
                     .title(Span::styled(
                         " Login ",
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme.fg_accent)
                             .add_modifier(Modifier::BOLD),
                     )),
             )
@@ -159,15 +159,15 @@ impl Component for LoginPage {
         let qr_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(60, 60, 60)))
+            .border_style(Style::default().fg(theme.border_unfocused))
             .title(Span::styled(
                 " 扫码登录 ",
-                Style::default().fg(Color::Rgb(150, 150, 150)),
+                Style::default().fg(theme.fg_secondary),
             ));
 
         if let Some(error) = &self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme.error))
                 .alignment(Alignment::Center)
                 .block(qr_block);
             frame.render_widget(error_widget, chunks[1]);
@@ -185,7 +185,7 @@ impl Component for LoginPage {
             let loading = Paragraph::new("⏳ 加载中...")
                 .style(
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.warning)
                         .add_modifier(Modifier::ITALIC),
                 )
                 .alignment(Alignment::Center)
@@ -194,7 +194,7 @@ impl Component for LoginPage {
         }
 
         // Status with enhanced styling
-        let (status_text, status_color) = self.status_text();
+        let (status_text, status_color) = self.status_text(theme);
         let status = Paragraph::new(status_text)
             .style(
                 Style::default()
@@ -206,32 +206,34 @@ impl Component for LoginPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Rgb(60, 60, 60)))
+                    .border_style(Style::default().fg(theme.border_unfocused))
                     .title(Span::styled(
                         " 状态 ",
-                        Style::default().fg(Color::Rgb(150, 150, 150)),
+                        Style::default().fg(theme.fg_secondary),
                     )),
             );
         frame.render_widget(status, chunks[2]);
 
         // Help with styled shortcuts
         let help_line = Line::from(vec![
-            Span::styled(" [", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled(" [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 "r",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("] ", Style::default().fg(Color::Rgb(60, 60, 60))),
-            Span::styled("刷新二维码", Style::default().fg(Color::Rgb(120, 120, 120))),
-            Span::styled("  [", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled("] ", Style::default().fg(theme.fg_secondary)),
+            Span::styled("刷新二维码", Style::default().fg(theme.fg_secondary)),
+            Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 "q",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("] ", Style::default().fg(Color::Rgb(60, 60, 60))),
-            Span::styled("退出", Style::default().fg(Color::Rgb(120, 120, 120))),
+            Span::styled("] ", Style::default().fg(theme.fg_secondary)),
+            Span::styled("退出", Style::default().fg(theme.fg_secondary)),
         ]);
         let help = Paragraph::new(help_line).alignment(Alignment::Center);
         frame.render_widget(help, chunks[3]);

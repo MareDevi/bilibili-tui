@@ -1,5 +1,6 @@
 //! Shared video card components for grid display across pages
 
+use super::Theme;
 use image::DynamicImage;
 use ratatui::prelude::*;
 use ratatui::widgets::*;
@@ -49,18 +50,18 @@ impl VideoCard {
     }
 
     /// Render a single video card
-    pub fn render(&mut self, frame: &mut Frame, area: Rect, is_selected: bool) {
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, is_selected: bool, theme: &Theme) {
         // Enhanced border styling
         let (border_style, border_type) = if is_selected {
             (
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.border_focused)
                     .add_modifier(Modifier::BOLD),
                 BorderType::Rounded,
             )
         } else {
             (
-                Style::default().fg(Color::Rgb(50, 50, 50)),
+                Style::default().fg(theme.border_unfocused),
                 BorderType::Rounded,
             )
         };
@@ -69,7 +70,7 @@ impl VideoCard {
             Span::styled(
                 " ▶ ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
@@ -93,14 +94,25 @@ impl VideoCard {
             ])
             .split(inner);
 
-        // Cover area
+        // Cover area - center the image horizontally
         let cover_area = card_chunks[0];
+
+        // Calculate centered cover area (assuming 16:9 aspect ratio for video covers)
+        // The image will be centered within the available cover_area
+        let target_width = cover_area.width.saturating_sub(2); // Leave 1 char margin on each side
+        let centered_cover = Rect {
+            x: cover_area.x + (cover_area.width.saturating_sub(target_width)) / 2,
+            y: cover_area.y,
+            width: target_width,
+            height: cover_area.height,
+        };
+
         if let Some(ref mut cover) = self.cover {
             let image_widget = StatefulImage::new();
-            frame.render_stateful_widget(image_widget, cover_area, cover);
+            frame.render_stateful_widget(image_widget, centered_cover, cover);
         } else {
             let placeholder = Paragraph::new("📺")
-                .style(Style::default().fg(Color::Rgb(60, 60, 60)))
+                .style(Style::default().fg(theme.fg_secondary))
                 .alignment(Alignment::Center);
             frame.render_widget(placeholder, cover_area);
         }
@@ -120,28 +132,30 @@ impl VideoCard {
 
         let title_style = if is_selected {
             Style::default()
-                .fg(Color::White)
+                .fg(theme.fg_primary)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Rgb(200, 200, 200))
+            Style::default().fg(theme.fg_secondary)
         };
 
-        let meta_style = Style::default().fg(Color::Rgb(100, 100, 100));
+        let meta_style = Style::default().fg(theme.fg_secondary);
 
         let info_text = Text::from(vec![
             Line::from(Span::styled(&display_title, title_style)),
             Line::from(Span::styled(
                 &self.author,
-                Style::default().fg(Color::Rgb(150, 150, 150)),
+                Style::default().fg(theme.fg_secondary),
             )),
             Line::from(vec![
                 Span::styled(&self.views, meta_style),
                 Span::styled(" · ", meta_style),
-                Span::styled(&self.duration, Style::default().fg(Color::Rgb(80, 180, 80))),
+                Span::styled(&self.duration, Style::default().fg(theme.success)),
             ]),
         ]);
 
-        let info = Paragraph::new(info_text).wrap(Wrap { trim: true });
+        let info = Paragraph::new(info_text)
+            .wrap(Wrap { trim: true })
+            .alignment(Alignment::Center);
         frame.render_widget(info, info_area);
     }
 }
@@ -189,7 +203,7 @@ impl VideoCardGrid {
     }
 
     pub fn visible_rows(&self, height: u16) -> usize {
-        let available_height = height.saturating_sub(5);
+        let available_height = height.saturating_sub(1);
         (available_height / self.card_height).max(1) as usize
     }
 
@@ -215,7 +229,7 @@ impl VideoCardGrid {
             let new_idx = self.selected_index + self.columns;
             if new_idx < self.cards.len() {
                 self.selected_index = new_idx;
-                self.update_scroll(3);
+                self.update_scroll(5);
                 return true;
             }
         }
@@ -225,7 +239,7 @@ impl VideoCardGrid {
     pub fn move_up(&mut self) -> bool {
         if !self.cards.is_empty() && self.selected_index >= self.columns {
             self.selected_index -= self.columns;
-            self.update_scroll(3);
+            self.update_scroll(5);
             return true;
         }
         false
@@ -304,13 +318,11 @@ impl VideoCardGrid {
     }
 
     /// Render the grid
-    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let visible_rows = self.visible_rows(area.height);
-        let fixed_card_width: u16 = 45;
-        let card_width = fixed_card_width.min(area.width / self.columns as u16);
 
         let row_constraints: Vec<Constraint> = (0..visible_rows)
-            .map(|_| Constraint::Length(self.card_height))
+            .map(|_| Constraint::Min(self.card_height))
             .collect();
 
         let rows = Layout::default()
@@ -328,16 +340,12 @@ impl VideoCardGrid {
                 break;
             }
 
-            let total_cards_width = card_width * self.columns as u16;
-            let margin = row_area.width.saturating_sub(total_cards_width) / 2;
-
             let col_constraints: Vec<Constraint> = (0..self.columns)
-                .map(|_| Constraint::Length(card_width))
+                .map(|_| Constraint::Ratio(1, self.columns as u32))
                 .collect();
 
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
-                .horizontal_margin(margin)
                 .constraints(col_constraints)
                 .split(*row_area);
 
@@ -352,7 +360,7 @@ impl VideoCardGrid {
 
         for (video_idx, col_area) in card_areas {
             let is_selected = video_idx == self.selected_index;
-            self.cards[video_idx].render(frame, col_area, is_selected);
+            self.cards[video_idx].render(frame, col_area, is_selected, theme);
         }
     }
 

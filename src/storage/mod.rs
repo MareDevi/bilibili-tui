@@ -45,6 +45,56 @@ impl Credentials {
     }
 }
 
+/// Keybindings configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Keybindings {
+    pub quit: String,
+    pub nav_up: String,
+    pub nav_down: String,
+    pub nav_left: String,
+    pub nav_right: String,
+    pub confirm: String,
+    pub back: String,
+    pub next_theme: String,
+    pub play: String,
+    pub refresh: String,
+    pub open_settings: String,
+}
+
+impl Default for Keybindings {
+    fn default() -> Self {
+        Self {
+            quit: "q".to_string(),
+            nav_up: "k".to_string(),
+            nav_down: "j".to_string(),
+            nav_left: "h".to_string(),
+            nav_right: "l".to_string(),
+            confirm: "Enter".to_string(),
+            back: "Esc".to_string(),
+            next_theme: "t".to_string(),
+            play: "p".to_string(),
+            refresh: "r".to_string(),
+            open_settings: "s".to_string(),
+        }
+    }
+}
+
+/// Application configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub theme: String,
+    pub keybindings: Keybindings,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            theme: "CatppuccinMocha".to_string(),
+            keybindings: Keybindings::default(),
+        }
+    }
+}
+
 /// Get the config directory path
 fn get_config_dir() -> Result<PathBuf> {
     let config_dir = dirs::config_dir()
@@ -63,6 +113,11 @@ fn get_credentials_path() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("credentials.json"))
 }
 
+/// Get the config file path
+fn get_config_path() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join("config.json"))
+}
+
 /// Save credentials to disk
 pub fn save_credentials(credentials: &Credentials) -> Result<()> {
     let path = get_credentials_path()?;
@@ -77,6 +132,35 @@ pub fn load_credentials() -> Result<Credentials> {
     let json = fs::read_to_string(path)?;
     let credentials: Credentials = serde_json::from_str(&json)?;
     Ok(credentials)
+}
+
+/// Delete credentials (logout)
+pub fn delete_credentials() -> Result<()> {
+    let path = get_credentials_path()?;
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+/// Save app config to disk
+pub fn save_config(config: &AppConfig) -> Result<()> {
+    let path = get_config_path()?;
+    let json = serde_json::to_string_pretty(config)?;
+    fs::write(path, json)?;
+    Ok(())
+}
+
+/// Load app config from disk
+pub fn load_config() -> Result<AppConfig> {
+    let path = get_config_path()?;
+    if path.exists() {
+        let json = fs::read_to_string(path)?;
+        let config: AppConfig = serde_json::from_str(&json)?;
+        Ok(config)
+    } else {
+        Ok(AppConfig::default())
+    }
 }
 
 /// Export cookies in Netscape format for yt-dlp

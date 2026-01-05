@@ -1,7 +1,7 @@
 //! Dynamic feed page with video card grid display
 
 use super::video_card::{VideoCard, VideoCardGrid};
-use super::Component;
+use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::dynamic::DynamicItem;
 use crate::app::AppAction;
@@ -63,6 +63,7 @@ pub struct DynamicPage {
     pub up_list: Vec<crate::api::dynamic::UpListItem>,
     pub selected_up_index: usize, // 0 = "全部动态", 1+ = specific UP
     pub loading_up_list: bool,
+    pub up_list_scroll_offset: usize, // Horizontal scroll offset for UP list
 }
 
 impl DynamicPage {
@@ -79,6 +80,7 @@ impl DynamicPage {
             up_list: Vec::new(),
             selected_up_index: 0,
             loading_up_list: false,
+            up_list_scroll_offset: 0,
         }
     }
 
@@ -90,8 +92,30 @@ impl DynamicPage {
     pub fn select_up(&mut self, index: usize) {
         if index <= self.up_list.len() {
             self.selected_up_index = index;
+            self.update_up_scroll();
             self.grid.clear();
             self.loading = true;
+        }
+    }
+
+    /// Update scroll offset to keep selected UP visible
+    fn update_up_scroll(&mut self) {
+        const VISIBLE_UPS: usize = 10;
+        // selected_up_index 0 is "全部", so actual UP indices start from 1
+        // up_list_scroll_offset is the first UP index (1-based) to show after "全部"
+        if self.selected_up_index == 0 {
+            // "全部" is always visible, scroll to beginning
+            self.up_list_scroll_offset = 0;
+        } else {
+            // Ensure selected UP is within visible range
+            let effective_idx = self.selected_up_index; // 1-based index into up_list
+            if effective_idx <= self.up_list_scroll_offset {
+                // Selected is before visible range, scroll left
+                self.up_list_scroll_offset = effective_idx.saturating_sub(1);
+            } else if effective_idx > self.up_list_scroll_offset + VISIBLE_UPS {
+                // Selected is after visible range, scroll right
+                self.up_list_scroll_offset = effective_idx.saturating_sub(VISIBLE_UPS);
+            }
         }
     }
 
@@ -326,7 +350,7 @@ impl Default for DynamicPage {
 }
 
 impl Component for DynamicPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -338,20 +362,40 @@ impl Component for DynamicPage {
             .split(area);
 
         // UP master selection bar
-        let mut up_spans = vec![if self.selected_up_index == 0 {
-            Span::styled(
+        const VISIBLE_UPS: usize = 10;
+        let mut up_spans: Vec<Span> = Vec::new();
+
+        // Show left indicator if scrolled
+        if self.up_list_scroll_offset > 0 {
+            up_spans.push(Span::styled("◀ ", Style::default().fg(theme.fg_secondary)));
+        }
+
+        // "全部" button - always visible
+        if self.selected_up_index == 0 {
+            up_spans.push(Span::styled(
                 " [全部] ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD)
                     .add_modifier(Modifier::UNDERLINED),
-            )
+            ));
         } else {
-            Span::styled(" [全部] ", Style::default().fg(Color::Rgb(120, 120, 120)))
-        }];
+            up_spans.push(Span::styled(
+                " [全部] ",
+                Style::default().fg(Color::Rgb(120, 120, 120)),
+            ));
+        }
 
-        for (i, user) in self.up_list.iter().enumerate().take(10) {
-            let is_selected = self.selected_up_index == i + 1;
+        // Show UPs from scroll offset, limited to VISIBLE_UPS
+        for (i, user) in self
+            .up_list
+            .iter()
+            .enumerate()
+            .skip(self.up_list_scroll_offset)
+            .take(VISIBLE_UPS)
+        {
+            let actual_index = i + 1; // +1 because index 0 is "全部"
+            let is_selected = self.selected_up_index == actual_index;
             let name = &user.uname;
             // Add update indicator (●) for UPs with recent updates
             let text = if user.has_update {
@@ -364,25 +408,23 @@ impl Component for DynamicPage {
                 up_spans.push(Span::styled(
                     text,
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.fg_accent)
                         .add_modifier(Modifier::BOLD)
                         .add_modifier(Modifier::UNDERLINED),
                 ));
             } else {
                 let color = if user.has_update {
-                    Color::LightBlue // Light blue for unselected with update
+                    theme.info // Light blue for unselected with update
                 } else {
-                    Color::Rgb(150, 150, 150) // Gray for no update
+                    theme.fg_secondary // Gray for no update
                 };
                 up_spans.push(Span::styled(text, Style::default().fg(color)));
             }
         }
 
-        if self.up_list.len() > 10 {
-            up_spans.push(Span::styled(
-                " ...更多 ",
-                Style::default().fg(Color::Rgb(100, 100, 100)),
-            ));
+        // Show right indicator if more UPs exist
+        if self.up_list_scroll_offset + VISIBLE_UPS < self.up_list.len() {
+            up_spans.push(Span::styled(" ▶", Style::default().fg(theme.fg_secondary)));
         }
 
         let up_bar = Paragraph::new(Line::from(up_spans))
@@ -391,7 +433,7 @@ impl Component for DynamicPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("关注的UP主")
-                    .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                    .border_style(Style::default().fg(theme.border_unfocused)),
             )
             .alignment(Alignment::Left);
         frame.render_widget(up_bar, chunks[0]);
@@ -411,15 +453,15 @@ impl Component for DynamicPage {
             Span::styled(
                 "关注动态",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!(" ({} 条)", self.grid.cards.len()),
-                Style::default().fg(Color::Rgb(100, 100, 100)),
+                Style::default().fg(theme.fg_secondary),
             ),
             if self.loading_more {
-                Span::styled(" 加载中...", Style::default().fg(Color::Yellow))
+                Span::styled(" 加载中...", Style::default().fg(theme.warning))
             } else {
                 Span::raw("")
             },
@@ -428,7 +470,7 @@ impl Component for DynamicPage {
             Block::default()
                 .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                .border_style(Style::default().fg(theme.border_unfocused)),
         )
         .alignment(Alignment::Center);
         frame.render_widget(title, header_chunks[0]);
@@ -447,14 +489,14 @@ impl Component for DynamicPage {
                 tab_spans.push(Span::styled(
                     tab_text,
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.fg_accent)
                         .add_modifier(Modifier::BOLD)
                         .add_modifier(Modifier::UNDERLINED),
                 ));
             } else {
                 tab_spans.push(Span::styled(
                     tab_text,
-                    Style::default().fg(Color::Rgb(120, 120, 120)),
+                    Style::default().fg(theme.fg_secondary),
                 ));
             }
         }
@@ -464,7 +506,7 @@ impl Component for DynamicPage {
                 Block::default()
                     .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                    .border_style(Style::default().fg(theme.border_unfocused)),
             )
             .alignment(Alignment::Center);
         frame.render_widget(tabs, header_chunks[1]);
@@ -472,44 +514,44 @@ impl Component for DynamicPage {
         // Content
         if self.loading {
             let loading = Paragraph::new("⏳ 加载动态中...")
-                .style(Style::default().fg(Color::Yellow))
+                .style(Style::default().fg(theme.warning))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                        .border_style(Style::default().fg(theme.border_unfocused)),
                 );
             frame.render_widget(loading, chunks[2]);
         } else if let Some(ref error) = self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme.error))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                        .border_style(Style::default().fg(theme.border_unfocused)),
                 );
             frame.render_widget(error_widget, chunks[2]);
         } else if self.grid.cards.is_empty() {
             let empty = Paragraph::new("暂无动态，请先登录并关注UP主")
-                .style(Style::default().fg(Color::Rgb(100, 100, 100)))
+                .style(Style::default().fg(theme.fg_secondary))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                        .border_style(Style::default().fg(theme.border_unfocused)),
                 );
             frame.render_widget(empty, chunks[2]);
         } else {
-            self.grid.render(frame, chunks[2]);
+            self.grid.render(frame, chunks[2], theme);
         }
 
         // Help
         let help = Paragraph::new("↑↓←→/hjkl:卡片导航 | Tab/Shift+Tab:切UP主 | []:切标签 | 1-4:直达 | Enter:详情 | r:刷新 | n:切页面")
-            .style(Style::default().fg(Color::Rgb(80, 80, 80)))
+            .style(Style::default().fg(theme.fg_secondary))
             .alignment(Alignment::Center);
         frame.render_widget(help, chunks[3]);
     }

@@ -1,4 +1,5 @@
 use crate::storage::Credentials;
+use crate::ui::ThemeVariant;
 
 /// Actions that can be triggered from UI components
 #[derive(Debug, Clone)]
@@ -9,6 +10,8 @@ pub enum AppAction {
     SwitchToHome,
     /// Switch to login page
     SwitchToLogin,
+    /// Switch to settings page
+    SwitchToSettings,
     /// Login was successful with credentials
     LoginSuccess(Credentials),
     /// Play a video by bvid
@@ -31,10 +34,18 @@ pub enum AppAction {
     LoadMoreSearch,
     /// Load more dynamic items
     LoadMoreDynamic,
+    /// Load more comments in video detail page
+    LoadMoreComments,
     /// Switch dynamic tab
     SwitchDynamicTab(crate::ui::DynamicTab),
     /// Select UP master (0 = all, 1+ = specific UP)
     SelectUpMaster(usize),
+    /// Switch to next theme variant
+    NextTheme,
+    /// Set a specific theme
+    SetTheme(ThemeVariant),
+    /// Logout and return to login page
+    Logout,
     /// No action
     None,
 }

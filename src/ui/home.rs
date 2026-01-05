@@ -1,6 +1,6 @@
 //! Homepage with video recommendations in a grid layout with cover images
 
-use super::Component;
+use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::recommend::VideoItem;
 use crate::app::AppAction;
@@ -57,7 +57,7 @@ impl HomePage {
             scroll_row: 0,
             picker,
             columns: 3,
-            card_height: 12,
+            card_height: 10,
             cover_tx,
             cover_rx,
             pending_downloads: HashSet::new(),
@@ -175,7 +175,7 @@ impl HomePage {
     }
 
     fn visible_rows(&self, height: u16) -> usize {
-        let available_height = height.saturating_sub(5);
+        let available_height = height.saturating_sub(1);
         (available_height / self.card_height).max(1) as usize
     }
 
@@ -204,7 +204,7 @@ impl Default for HomePage {
 }
 
 impl Component for HomePage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -220,32 +220,32 @@ impl Component for HomePage {
             Span::styled(
                 "B",
                 Style::default()
-                    .fg(Color::Rgb(251, 114, 153))
+                    .fg(theme.bilibili_pink)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "ilibili ",
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme.fg_primary)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("推荐", Style::default().fg(Color::Cyan)),
-            Span::styled(" │ ", Style::default().fg(Color::Rgb(80, 80, 80))),
+            Span::styled("推荐", Style::default().fg(theme.fg_accent)),
+            Span::styled(" │ ", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 format!("{}", self.videos.len()),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             ),
-            Span::styled(" 个视频 │ ", Style::default().fg(Color::Rgb(80, 80, 80))),
+            Span::styled(" 个视频 │ ", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 format!("{}", self.selected_row() + 1),
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme.success),
             ),
-            Span::styled("/", Style::default().fg(Color::Rgb(80, 80, 80))),
+            Span::styled("/", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 format!("{}", self.total_rows()),
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme.success),
             ),
-            Span::styled(" 行 ", Style::default().fg(Color::Rgb(80, 80, 80))),
+            Span::styled(" 行 ", Style::default().fg(theme.fg_secondary)),
         ]);
 
         let header = Paragraph::new(title)
@@ -253,11 +253,11 @@ impl Component for HomePage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Rgb(60, 60, 60)))
+                    .border_style(Style::default().fg(theme.border_unfocused))
                     .title(Span::styled(
                         " 首页 ",
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme.fg_accent)
                             .add_modifier(Modifier::BOLD),
                     )),
             )
@@ -269,68 +269,77 @@ impl Component for HomePage {
             let loading = Paragraph::new("⏳ 加载中...")
                 .style(
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.warning)
                         .add_modifier(Modifier::ITALIC),
                 )
                 .alignment(Alignment::Center);
             frame.render_widget(loading, chunks[1]);
         } else if let Some(ref error) = self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme.error))
                 .alignment(Alignment::Center);
             frame.render_widget(error_widget, chunks[1]);
         } else if self.videos.is_empty() {
             let empty = Paragraph::new("📭 暂无推荐视频")
-                .style(Style::default().fg(Color::Rgb(100, 100, 100)))
+                .style(Style::default().fg(theme.fg_secondary))
                 .alignment(Alignment::Center);
             frame.render_widget(empty, chunks[1]);
         } else {
-            self.render_grid(frame, chunks[1]);
+            self.render_grid(frame, chunks[1], theme);
         }
 
         // Help with styled shortcuts
         let help_line = Line::from(vec![
-            Span::styled(" [", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled(" [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 "←↑↓→",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("/", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled("/", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 "hjkl",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("] ", Style::default().fg(Color::Rgb(60, 60, 60))),
-            Span::styled("导航", Style::default().fg(Color::Rgb(120, 120, 120))),
-            Span::styled("  [", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled("] ", Style::default().fg(theme.fg_secondary)),
+            Span::styled("导航", Style::default().fg(theme.fg_secondary)),
+            Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 "Enter",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("] ", Style::default().fg(Color::Rgb(60, 60, 60))),
-            Span::styled("播放", Style::default().fg(Color::Rgb(120, 120, 120))),
-            Span::styled("  [", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled("] ", Style::default().fg(theme.fg_secondary)),
+            Span::styled("播放", Style::default().fg(theme.fg_secondary)),
+            Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 "r",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("] ", Style::default().fg(Color::Rgb(60, 60, 60))),
-            Span::styled("刷新", Style::default().fg(Color::Rgb(120, 120, 120))),
-            Span::styled("  [", Style::default().fg(Color::Rgb(60, 60, 60))),
+            Span::styled("] ", Style::default().fg(theme.fg_secondary)),
+            Span::styled("刷新", Style::default().fg(theme.fg_secondary)),
+            Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
                 "q",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("] ", Style::default().fg(Color::Rgb(60, 60, 60))),
-            Span::styled("退出", Style::default().fg(Color::Rgb(120, 120, 120))),
+            Span::styled("] ", Style::default().fg(theme.fg_secondary)),
+            Span::styled("退出", Style::default().fg(theme.fg_secondary)),
+            Span::styled("  [", Style::default().fg(theme.fg_secondary)),
+            Span::styled(
+                "t",
+                Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("] ", Style::default().fg(theme.fg_secondary)),
+            Span::styled("切换主题", Style::default().fg(theme.fg_secondary)),
         ]);
         let help = Paragraph::new(help_line).alignment(Alignment::Center);
         frame.render_widget(help, chunks[2]);
@@ -399,21 +408,19 @@ impl Component for HomePage {
                 Some(AppAction::SwitchToHome)
             }
             KeyCode::Tab => Some(AppAction::NavNext),
+            KeyCode::Char('t') => Some(AppAction::NextTheme),
+            KeyCode::Char('s') => Some(AppAction::SwitchToSettings),
             _ => Some(AppAction::None),
         }
     }
 }
 
 impl HomePage {
-    fn render_grid(&mut self, frame: &mut Frame, area: Rect) {
+    fn render_grid(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let visible_rows = self.visible_rows(area.height);
 
-        // Use fixed card width for consistent layout, cap at available width
-        let fixed_card_width: u16 = 45;
-        let card_width = fixed_card_width.min(area.width / self.columns as u16);
-
         let row_constraints: Vec<Constraint> = (0..visible_rows)
-            .map(|_| Constraint::Length(self.card_height))
+            .map(|_| Constraint::Min(self.card_height))
             .collect();
 
         let rows = Layout::default()
@@ -432,17 +439,12 @@ impl HomePage {
                 break;
             }
 
-            // Calculate centering margin based on fixed card width
-            let total_cards_width = card_width * self.columns as u16;
-            let margin = row_area.width.saturating_sub(total_cards_width) / 2;
-
             let col_constraints: Vec<Constraint> = (0..self.columns)
-                .map(|_| Constraint::Length(card_width))
+                .map(|_| Constraint::Ratio(1, self.columns as u32))
                 .collect();
 
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
-                .horizontal_margin(margin)
                 .constraints(col_constraints)
                 .split(*row_area);
 
@@ -458,7 +460,7 @@ impl HomePage {
         // Now render each card with mutable access
         for (video_idx, col_area) in card_areas {
             let is_selected = video_idx == self.selected_index;
-            self.render_video_card(frame, col_area, video_idx, is_selected);
+            self.render_video_card(frame, col_area, video_idx, is_selected, theme);
         }
     }
 
@@ -468,18 +470,19 @@ impl HomePage {
         area: Rect,
         video_idx: usize,
         is_selected: bool,
+        theme: &Theme,
     ) {
         // Enhanced border styling
         let (border_style, border_type) = if is_selected {
             (
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.border_focused)
                     .add_modifier(Modifier::BOLD),
                 BorderType::Rounded,
             )
         } else {
             (
-                Style::default().fg(Color::Rgb(50, 50, 50)),
+                Style::default().fg(theme.border_unfocused),
                 BorderType::Rounded,
             )
         };
@@ -488,7 +491,7 @@ impl HomePage {
             Span::styled(
                 " ▶ ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
@@ -524,7 +527,7 @@ impl HomePage {
                 "📺"
             };
             let placeholder = Paragraph::new(placeholder_text)
-                .style(Style::default().fg(Color::Rgb(60, 60, 60)))
+                .style(Style::default().fg(theme.fg_secondary))
                 .alignment(Alignment::Center);
             frame.render_widget(placeholder, cover_area);
         }
@@ -552,24 +555,24 @@ impl HomePage {
         // Multi-styled info text
         let title_style = if is_selected {
             Style::default()
-                .fg(Color::White)
+                .fg(theme.fg_primary)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Rgb(200, 200, 200))
+            Style::default().fg(theme.fg_secondary)
         };
 
-        let meta_style = Style::default().fg(Color::Rgb(100, 100, 100));
+        let meta_style = Style::default().fg(theme.fg_secondary);
 
         let info_text = Text::from(vec![
             Line::from(Span::styled(&display_title, title_style)),
             Line::from(Span::styled(
                 author,
-                Style::default().fg(Color::Rgb(150, 150, 150)),
+                Style::default().fg(theme.fg_secondary),
             )),
             Line::from(vec![
                 Span::styled(&views, meta_style),
                 Span::styled(" · ", meta_style),
-                Span::styled(&duration, Style::default().fg(Color::Rgb(80, 180, 80))),
+                Span::styled(&duration, Style::default().fg(theme.success)),
             ]),
         ]);
 

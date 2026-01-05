@@ -1,7 +1,7 @@
 //! Search page with video card grid display
 
 use super::video_card::{VideoCard, VideoCardGrid};
-use super::Component;
+use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::search::SearchVideoItem;
 use crate::app::AppAction;
@@ -117,7 +117,7 @@ impl Default for SearchPage {
 }
 
 impl Component for SearchPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -129,22 +129,22 @@ impl Component for SearchPage {
 
         // Search input
         let input_style = if self.input_mode {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(theme.warning)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.fg_primary)
         };
 
         let input_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(if self.input_mode {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(theme.border_focused)
             } else {
-                Style::default().fg(Color::Rgb(60, 60, 60))
+                Style::default().fg(theme.border_unfocused)
             })
             .title(Span::styled(
                 " 🔍 搜索视频 ",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.fg_accent),
             ));
 
         let cursor_char = if self.input_mode { "▌" } else { "" };
@@ -156,28 +156,28 @@ impl Component for SearchPage {
         // Results
         if self.loading {
             let loading = Paragraph::new("⏳ 搜索中...")
-                .style(Style::default().fg(Color::Yellow))
+                .style(Style::default().fg(theme.warning))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(Color::Rgb(60, 60, 60)))
+                        .border_style(Style::default().fg(theme.border_unfocused))
                         .title(Span::styled(
                             format!(" 结果 ({}) ", self.total_results),
-                            Style::default().fg(Color::Rgb(150, 150, 150)),
+                            Style::default().fg(theme.fg_secondary),
                         )),
                 );
             frame.render_widget(loading, chunks[1]);
         } else if let Some(ref error) = self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme.error))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                        .border_style(Style::default().fg(theme.border_unfocused)),
                 );
             frame.render_widget(error_widget, chunks[1]);
         } else if self.grid.cards.is_empty() {
@@ -186,25 +186,25 @@ impl Component for SearchPage {
             } else {
                 "没有找到相关视频"
             })
-            .style(Style::default().fg(Color::Rgb(100, 100, 100)))
+            .style(Style::default().fg(theme.fg_secondary))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                    .border_style(Style::default().fg(theme.border_unfocused)),
             );
             frame.render_widget(empty, chunks[1]);
         } else {
             // Render with header
             let header = Paragraph::new(Line::from(vec![
-                Span::styled(" 搜索结果 ", Style::default().fg(Color::Cyan)),
+                Span::styled(" 搜索结果 ", Style::default().fg(theme.fg_accent)),
                 Span::styled(
                     format!("({}/{})", self.grid.cards.len(), self.total_results),
-                    Style::default().fg(Color::Rgb(100, 100, 100)),
+                    Style::default().fg(theme.fg_secondary),
                 ),
                 if self.loading_more {
-                    Span::styled(" 加载中...", Style::default().fg(Color::Yellow))
+                    Span::styled(" 加载中...", Style::default().fg(theme.warning))
                 } else {
                     Span::raw("")
                 },
@@ -213,7 +213,7 @@ impl Component for SearchPage {
                 Block::default()
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+                    .border_style(Style::default().fg(theme.border_unfocused)),
             );
 
             let header_area = Rect {
@@ -227,7 +227,7 @@ impl Component for SearchPage {
             };
 
             frame.render_widget(header, header_area);
-            self.grid.render(frame, grid_area);
+            self.grid.render(frame, grid_area, theme);
         }
 
         // Help
@@ -237,7 +237,7 @@ impl Component for SearchPage {
             "[←↑↓→/hjkl] 导航  [Enter] 详情  [/] 搜索  [Tab] 切换"
         };
         let help = Paragraph::new(help_text)
-            .style(Style::default().fg(Color::Rgb(80, 80, 80)))
+            .style(Style::default().fg(theme.fg_secondary))
             .alignment(Alignment::Center);
         frame.render_widget(help, chunks[2]);
     }

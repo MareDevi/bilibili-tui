@@ -3,10 +3,10 @@ mod action;
 pub use action::AppAction;
 
 use crate::api::client::ApiClient;
-use crate::storage::Credentials;
+use crate::storage::{AppConfig, Credentials, Keybindings};
 use crate::ui::{
-    Component, DynamicPage, HomePage, LoginPage, NavItem, Page, SearchPage, Sidebar,
-    VideoDetailPage,
+    Component, DynamicPage, HomePage, LoginPage, NavItem, Page, SearchPage, SettingsPage, Sidebar,
+    Theme, ThemeVariant, VideoDetailPage,
 };
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -33,7 +33,12 @@ pub struct App {
     pub credentials: Option<Credentials>,
     pub sidebar: Sidebar,
     pub show_sidebar: bool,
+
     pub previous_page: Option<PreviousPage>,
+    pub theme: Theme,
+    pub theme_variant: ThemeVariant,
+    pub config: AppConfig,
+    pub keybindings: Keybindings,
 }
 
 impl App {
@@ -44,6 +49,15 @@ impl App {
         } else {
             ApiClient::new()
         };
+
+        // Load config and apply saved theme
+        let config = crate::storage::load_config().unwrap_or_default();
+        let keybindings = config.keybindings.clone();
+        let theme_variant = config
+            .theme
+            .parse()
+            .unwrap_or(ThemeVariant::CatppuccinMocha);
+        let theme = Theme::from_variant(theme_variant);
 
         // Start on login page if no credentials, otherwise go to home
         let current_page = if credentials.is_some() {
@@ -60,6 +74,10 @@ impl App {
             sidebar: Sidebar::new(),
             show_sidebar: true,
             previous_page: None,
+            theme,
+            theme_variant,
+            config,
+            keybindings,
         }
     }
 
@@ -91,8 +109,8 @@ impl App {
         // Login page and VideoDetail don't show sidebar
         if matches!(self.current_page, Page::Login(_) | Page::VideoDetail(_)) {
             match &mut self.current_page {
-                Page::Login(page) => page.draw(frame, area),
-                Page::VideoDetail(page) => page.draw(frame, area),
+                Page::Login(page) => page.draw(frame, area, &self.theme),
+                Page::VideoDetail(page) => page.draw(frame, area, &self.theme),
                 _ => {}
             }
             return;
@@ -115,7 +133,7 @@ impl App {
         };
 
         if self.show_sidebar && chunks.len() > 1 {
-            self.sidebar.draw(frame, chunks[0]);
+            self.sidebar.draw(frame, chunks[0], &self.theme);
             self.draw_page(frame, chunks[1]);
         } else {
             self.draw_page(frame, chunks[0]);
@@ -124,11 +142,12 @@ impl App {
 
     fn draw_page(&mut self, frame: &mut Frame, area: Rect) {
         match &mut self.current_page {
-            Page::Login(page) => page.draw(frame, area),
-            Page::Home(page) => page.draw(frame, area),
-            Page::Search(page) => page.draw(frame, area),
-            Page::Dynamic(page) => page.draw(frame, area),
-            Page::VideoDetail(page) => page.draw(frame, area),
+            Page::Login(page) => page.draw(frame, area, &self.theme),
+            Page::Home(page) => page.draw(frame, area, &self.theme),
+            Page::Search(page) => page.draw(frame, area, &self.theme),
+            Page::Dynamic(page) => page.draw(frame, area, &self.theme),
+            Page::VideoDetail(page) => page.draw(frame, area, &self.theme),
+            Page::Settings(page) => page.draw(frame, area, &self.theme),
         }
     }
 
@@ -139,6 +158,7 @@ impl App {
             Page::Search(page) => page.handle_input(key),
             Page::Dynamic(page) => page.handle_input_with_modifiers(key, modifiers),
             Page::VideoDetail(page) => page.handle_input(key),
+            Page::Settings(page) => page.handle_input(key),
         };
 
         if let Some(action) = action {
@@ -238,7 +258,7 @@ impl App {
                 let client = self.api_client.lock().await;
                 detail_page.load_data(&client).await;
                 drop(client);
-                self.current_page = Page::VideoDetail(detail_page);
+                self.current_page = Page::VideoDetail(Box::new(detail_page));
             }
             AppAction::BackToList => {
                 match self.previous_page.take() {
@@ -282,6 +302,12 @@ impl App {
                     page.load_more(&client).await;
                 }
             }
+            AppAction::LoadMoreComments => {
+                if let Page::VideoDetail(page) = &mut self.current_page {
+                    let client = self.api_client.lock().await;
+                    page.load_more_comments(&client).await;
+                }
+            }
             AppAction::SwitchDynamicTab(tab) => {
                 if let Page::Dynamic(page) = &mut self.current_page {
                     page.switch_tab(tab);
@@ -320,6 +346,29 @@ impl App {
                     }
                 }
             }
+            AppAction::NextTheme => {
+                self.theme_variant = self.theme_variant.next();
+                self.theme = Theme::from_variant(self.theme_variant);
+                self.save_theme_to_config();
+            }
+            AppAction::SetTheme(variant) => {
+                self.theme_variant = variant;
+                self.theme = Theme::from_variant(variant);
+                self.save_theme_to_config();
+            }
+            AppAction::SwitchToSettings => {
+                self.sidebar.select(NavItem::Settings);
+                let page = SettingsPage::new(self.keybindings.clone(), self.theme_variant);
+                self.current_page = Page::Settings(page);
+            }
+            AppAction::Logout => {
+                if let Err(e) = crate::storage::delete_credentials() {
+                    eprintln!("Failed to delete credentials: {}", e);
+                }
+                self.credentials = None;
+                self.current_page = Page::Login(LoginPage::new());
+                self.init_current_page().await;
+            }
             AppAction::None => {}
         }
     }
@@ -341,6 +390,12 @@ impl App {
                 if !matches!(self.current_page, Page::Dynamic(_)) {
                     self.current_page = Page::Dynamic(DynamicPage::new());
                     self.init_current_page().await;
+                }
+            }
+            NavItem::Settings => {
+                if !matches!(self.current_page, Page::Settings(_)) {
+                    let page = SettingsPage::new(self.keybindings.clone(), self.theme_variant);
+                    self.current_page = Page::Settings(page);
                 }
             }
         }
@@ -393,6 +448,9 @@ impl App {
             Page::VideoDetail(_) => {
                 // VideoDetail is initialized when created
             }
+            Page::Settings(_) => {
+                // Settings doesn't need async initialization
+            }
         }
     }
 
@@ -418,7 +476,18 @@ impl App {
                 page.poll_cover_results();
                 page.start_cover_downloads();
             }
+            Page::VideoDetail(page) => {
+                page.poll_cover_results();
+                page.start_cover_downloads();
+            }
             _ => {}
+        }
+    }
+
+    fn save_theme_to_config(&mut self) {
+        self.config.theme = self.theme_variant.to_string();
+        if let Err(e) = crate::storage::save_config(&self.config) {
+            eprintln!("Failed to save config: {}", e);
         }
     }
 }
