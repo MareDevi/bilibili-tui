@@ -4,7 +4,7 @@ pub use action::AppAction;
 
 use crate::api::client::ApiClient;
 use crate::storage::Credentials;
-use crate::ui::{Component, DynamicPage, HomePage, LoginPage, NavItem, Page, SearchPage, Sidebar};
+use crate::ui::{Component, DynamicPage, HomePage, LoginPage, NavItem, Page, SearchPage, Sidebar, VideoDetailPage};
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
     prelude::*,
@@ -14,6 +14,14 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Previous page for back navigation
+#[derive(Clone)]
+pub enum PreviousPage {
+    Home,
+    Search,
+    Dynamic,
+}
+
 /// Main application state
 pub struct App {
     pub current_page: Page,
@@ -22,6 +30,7 @@ pub struct App {
     pub credentials: Option<Credentials>,
     pub sidebar: Sidebar,
     pub show_sidebar: bool,
+    pub previous_page: Option<PreviousPage>,
 }
 
 impl App {
@@ -47,6 +56,7 @@ impl App {
             credentials,
             sidebar: Sidebar::new(),
             show_sidebar: true,
+            previous_page: None,
         }
     }
 
@@ -75,10 +85,11 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         
-        // Login page doesn't show sidebar
-        if matches!(self.current_page, Page::Login(_)) {
+        // Login page and VideoDetail don't show sidebar
+        if matches!(self.current_page, Page::Login(_) | Page::VideoDetail(_)) {
             match &mut self.current_page {
                 Page::Login(page) => page.draw(frame, area),
+                Page::VideoDetail(page) => page.draw(frame, area),
                 _ => {}
             }
             return;
@@ -114,6 +125,7 @@ impl App {
             Page::Home(page) => page.draw(frame, area),
             Page::Search(page) => page.draw(frame, area),
             Page::Dynamic(page) => page.draw(frame, area),
+            Page::VideoDetail(page) => page.draw(frame, area),
         }
     }
 
@@ -123,6 +135,7 @@ impl App {
             Page::Home(page) => page.handle_input(key),
             Page::Search(page) => page.handle_input(key),
             Page::Dynamic(page) => page.handle_input(key),
+            Page::VideoDetail(page) => page.handle_input(key),
         };
 
         if let Some(action) = action {
@@ -164,12 +177,17 @@ impl App {
                 }
             }
             AppAction::NavNext => {
-                self.sidebar.next();
-                self.switch_to_nav_page().await;
+                // Don't navigate if on video detail page
+                if !matches!(self.current_page, Page::VideoDetail(_)) {
+                    self.sidebar.next();
+                    self.switch_to_nav_page().await;
+                }
             }
             AppAction::NavPrev => {
-                self.sidebar.prev();
-                self.switch_to_nav_page().await;
+                if !matches!(self.current_page, Page::VideoDetail(_)) {
+                    self.sidebar.prev();
+                    self.switch_to_nav_page().await;
+                }
             }
             AppAction::Search(keyword) => {
                 if let Page::Search(page) = &mut self.current_page {
@@ -200,6 +218,63 @@ impl App {
                             page.set_error(format!("加载动态失败: {}", e));
                         }
                     }
+                }
+            }
+            AppAction::OpenVideoDetail(bvid, aid) => {
+                // Remember previous page
+                self.previous_page = match &self.current_page {
+                    Page::Home(_) => Some(PreviousPage::Home),
+                    Page::Search(_) => Some(PreviousPage::Search),
+                    Page::Dynamic(_) => Some(PreviousPage::Dynamic),
+                    _ => None,
+                };
+                
+                let mut detail_page = VideoDetailPage::new(bvid, aid);
+                let client = self.api_client.lock().await;
+                detail_page.load_data(&client).await;
+                drop(client);
+                self.current_page = Page::VideoDetail(detail_page);
+            }
+            AppAction::BackToList => {
+                match self.previous_page.take() {
+                    Some(PreviousPage::Home) => {
+                        self.sidebar.select(NavItem::Home);
+                        self.current_page = Page::Home(HomePage::new());
+                        self.init_current_page().await;
+                    }
+                    Some(PreviousPage::Search) => {
+                        self.sidebar.select(NavItem::Search);
+                        self.current_page = Page::Search(SearchPage::new());
+                    }
+                    Some(PreviousPage::Dynamic) => {
+                        self.sidebar.select(NavItem::Dynamic);
+                        self.current_page = Page::Dynamic(DynamicPage::new());
+                        self.init_current_page().await;
+                    }
+                    None => {
+                        // Default to home
+                        self.sidebar.select(NavItem::Home);
+                        self.current_page = Page::Home(HomePage::new());
+                        self.init_current_page().await;
+                    }
+                }
+            }
+            AppAction::LoadMoreRecommendations => {
+                if let Page::Home(page) = &mut self.current_page {
+                    let client = self.api_client.lock().await;
+                    page.load_more(&client).await;
+                }
+            }
+            AppAction::LoadMoreSearch => {
+                if let Page::Search(page) = &mut self.current_page {
+                    let client = self.api_client.lock().await;
+                    page.load_more(&client).await;
+                }
+            }
+            AppAction::LoadMoreDynamic => {
+                if let Page::Dynamic(page) = &mut self.current_page {
+                    let client = self.api_client.lock().await;
+                    page.load_more(&client).await;
                 }
             }
             AppAction::None => {}
@@ -255,6 +330,9 @@ impl App {
                     }
                 }
             }
+            Page::VideoDetail(_) => {
+                // VideoDetail is initialized when created
+            }
         }
     }
 
@@ -272,6 +350,14 @@ impl App {
                 page.poll_cover_results();
                 page.start_cover_downloads();
             }
+            Page::Search(page) => {
+                page.poll_cover_results();
+                page.start_cover_downloads();
+            }
+            Page::Dynamic(page) => {
+                page.poll_cover_results();
+                page.start_cover_downloads();
+            }
             _ => {}
         }
     }
@@ -282,3 +368,4 @@ impl Default for App {
         Self::new()
     }
 }
+

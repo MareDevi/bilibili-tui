@@ -40,6 +40,8 @@ pub struct HomePage {
     cover_tx: mpsc::Sender<CoverResult>,
     cover_rx: mpsc::Receiver<CoverResult>,
     pending_downloads: HashSet<usize>,
+    fresh_idx: i32,
+    loading_more: bool,
 }
 
 impl HomePage {
@@ -63,6 +65,8 @@ impl HomePage {
             cover_tx,
             cover_rx,
             pending_downloads: HashSet::new(),
+            fresh_idx: 1,
+            loading_more: false,
         }
     }
 
@@ -70,6 +74,7 @@ impl HomePage {
         self.loading = true;
         self.error_message = None;
         self.pending_downloads.clear();
+        self.fresh_idx = 1;
 
         match api_client.get_recommendations().await {
             Ok(videos) => {
@@ -89,6 +94,40 @@ impl HomePage {
                 self.loading = false;
             }
         }
+    }
+
+    pub async fn load_more(&mut self, api_client: &ApiClient) {
+        if self.loading_more {
+            return;
+        }
+
+        self.loading_more = true;
+        self.fresh_idx += 1;
+
+        match api_client.get_recommendations_paged(self.fresh_idx).await {
+            Ok(videos) => {
+                for video in videos {
+                    self.videos.push(VideoCard {
+                        video,
+                        cover: None,
+                    });
+                }
+                self.loading_more = false;
+            }
+            Err(_) => {
+                self.fresh_idx -= 1;
+                self.loading_more = false;
+            }
+        }
+    }
+
+    pub fn is_near_bottom(&self, visible_rows: usize) -> bool {
+        if self.videos.is_empty() {
+            return false;
+        }
+        let current_row = self.selected_row();
+        let total = self.total_rows();
+        current_row + 2 >= total.saturating_sub(1) && total > visible_rows
     }
 
     /// Start background downloads for visible covers (non-blocking)
@@ -261,6 +300,10 @@ impl Component for HomePage {
                         self.selected_index = new_idx;
                     }
                     self.update_scroll(3);
+                    // Check for pagination
+                    if self.is_near_bottom(3) && !self.loading_more {
+                        return Some(AppAction::LoadMoreRecommendations);
+                    }
                 }
                 Some(AppAction::None)
             }
@@ -286,6 +329,16 @@ impl Component for HomePage {
                 Some(AppAction::None)
             }
             KeyCode::Enter => {
+                if let Some(card) = self.videos.get(self.selected_index) {
+                    if let Some(bvid) = &card.video.bvid {
+                        let aid = card.video.id;
+                        return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
+                    }
+                }
+                Some(AppAction::None)
+            }
+            KeyCode::Char('p') => {
+                // Direct play without going to detail
                 if let Some(card) = self.videos.get(self.selected_index) {
                     if let Some(bvid) = &card.video.bvid {
                         return Some(AppAction::PlayVideo(bvid.clone()));

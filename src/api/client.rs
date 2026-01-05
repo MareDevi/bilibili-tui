@@ -260,6 +260,58 @@ impl ApiClient {
             update_num: Some(0),
         }))
     }
+
+    // Comments API
+    pub async fn get_comments(&self, oid: i64, pn: i32) -> Result<super::comment::CommentData> {
+        let url = format!(
+            "{}/x/v2/reply?type=1&oid={}&sort=1&ps=20&pn={}",
+            BilibiliApiDomain::Main.as_str(),
+            oid,
+            pn
+        );
+
+        let resp: ApiResponse<super::comment::CommentData> = self.get(&url).await?;
+        Ok(resp.data.unwrap_or(super::comment::CommentData {
+            page: None,
+            replies: None,
+            hots: None,
+        }))
+    }
+
+    // Related Videos API
+    pub async fn get_related_videos(&self, bvid: &str) -> Result<Vec<super::video::RelatedVideoItem>> {
+        let url = format!(
+            "{}/x/web-interface/archive/related?bvid={}",
+            BilibiliApiDomain::Main.as_str(),
+            bvid
+        );
+
+        let resp: ApiResponse<Vec<super::video::RelatedVideoItem>> = self.get(&url).await?;
+        Ok(resp.data.unwrap_or_default())
+    }
+
+    // Extended Recommendations API with pagination
+    pub async fn get_recommendations_paged(&self, fresh_idx: i32) -> Result<Vec<super::recommend::VideoItem>> {
+        let url = self.build_url(
+            BilibiliApiDomain::Main,
+            "/x/web-interface/wbi/index/top/feed/rcmd",
+        );
+
+        let params = vec![
+            ("fresh_type", "4".to_string()),
+            ("ps", "20".to_string()),
+            ("fresh_idx", fresh_idx.to_string()),
+            ("fresh_idx_1h", fresh_idx.to_string()),
+        ];
+
+        let resp: ApiResponse<super::recommend::RecommendData> =
+            self.get_with_wbi(&url, params).await?;
+
+        Ok(resp
+            .data
+            .map(|d| d.item.into_iter().filter(|v| v.bvid.is_some()).collect())
+            .unwrap_or_default())
+    }
 }
 
 impl Default for ApiClient {

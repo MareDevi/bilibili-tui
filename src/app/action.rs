@@ -21,6 +21,17 @@ pub enum AppAction {
     Search(String),
     /// Refresh dynamic feed
     RefreshDynamic,
+    /// Open video detail page (bvid, aid)
+    OpenVideoDetail(String, i64),
+    /// Go back to previous page
+    BackToList,
+    /// Load more recommendations
+    LoadMoreRecommendations,
+    /// Load more search results
+    LoadMoreSearch,
+    /// Load more dynamic items
+    LoadMoreDynamic,
     /// No action
     None,
 }
+
