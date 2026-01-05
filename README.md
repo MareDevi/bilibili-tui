@@ -170,7 +170,7 @@ src/
 #### 方法一：使用 Cargo（推荐）
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/bilibili-tui.git
+git clone https://github.com/maredevi/bilibili-tui.git
 cd bilibili-tui
 
 # 构建发布版本
@@ -183,7 +183,7 @@ cargo build --release
 #### 方法二：从源码编译（开发版本）
 ```bash
 # 从 git 仓库克隆并构建
-git clone <repository-url>
+git clone https://github.com/maredevi/bilibili-tui.git
 cd bilibili-tui
 cargo install --path .
 ```
@@ -196,7 +196,7 @@ cargo install --path .
 # Linux: 参考官方文档 https://mise.jdx.dev/
 
 # 克隆仓库
-git clone <repository-url>
+git clone https://github.com/maredevi/bilibili-tui.git
 cd bilibili-tui
 
 # 安装项目依赖
@@ -379,7 +379,7 @@ main.rs → App::run() → 事件循环 → UI 组件 → AppActions → App::ha
 
 #### 1. 克隆仓库
 ```bash
-git clone https://github.com/yourusername/bilibili-tui.git
+git clone https://github.com/maredevi/bilibili-tui.git
 cd bilibili-tui
 ```
 
@@ -488,9 +488,9 @@ RUST_LOG=debug cargo run
 
 ## 📞 联系方式
 
-- 项目主页: [GitHub Repository](<repository-url>)
-- 问题反馈: [GitHub Issues](<repository-url>/issues)
-- 功能请求: [GitHub Discussions](<repository-url>/discussions)
+- 项目主页: [GitHub Repository](https://github.com/maredevi/bilibili-tui)
+- 问题反馈: [GitHub Issues](https://github.com/maredevi/bilibili-tui/issues)
+- 功能请求: [GitHub Discussions](https://github.com/maredevi/bilibili-tui/discussions)
 
 ---
 
