@@ -1,7 +1,11 @@
 [package]
 name = "bilibili-tui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
+authors = ["MareDevi <me@maredevi.moe>"]
+description = "A terminal user interface (TUI) client for Bilibili"
+license = "MIT"
+repository = "https://github.com/MareDevi/bilibili-tui"
 
 [dependencies]
 anyhow = "1.0.100"
@@ -20,3 +24,9 @@ serde_json = "1.0.148"
 tokio = { version = "1.0", features = ["full"] }
 tui-big-text = "0.8.1"
 tui-qrcode = { version = "0.2.2", default-features = false }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "z"
