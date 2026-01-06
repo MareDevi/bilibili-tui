@@ -186,7 +186,21 @@ src/
 
 ### 安装方法
 
-#### 方法一：使用 Cargo（推荐）
+#### 方法一：从 AUR 安装（Arch Linux 推荐）
+
+对于 Arch Linux 用户，推荐通过 AUR 安装预编译的二进制包：
+
+```bash
+# 使用 yay
+yay -S bilibili-tui-bin
+
+# 或使用 paru
+paru -S bilibili-tui-bin
+```
+
+> 这是 Arch Linux 用户最便捷的安装方式，无需手动编译，自动处理依赖关系。
+
+#### 方法二：使用 Cargo
 
 ```bash
 # 克隆仓库
@@ -200,7 +214,7 @@ cargo build --release
 ./target/release/bilibili-tui
 ```
 
-#### 方法二：从源码编译（开发版本）
+#### 方法三：从源码编译（开发版本）
 
 ```bash
 # 从 git 仓库克隆并构建
@@ -211,7 +225,7 @@ cargo install --path .
 
 > 注意：当前版本尚未发布到 crates.io
 
-#### 方法三：使用 mise（推荐用于开发）
+#### 方法四：使用 mise（推荐用于开发）
 
 ```bash
 # 安装 mise（如果未安装）
