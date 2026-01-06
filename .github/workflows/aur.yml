@@ -1,0 +1,52 @@
+name: Publish to AUR
+
+# 关键：只有在 GitHub Release 正式发布后才运行
+on:
+  release:
+    types: [published]
+
+jobs:
+  aur:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. 安装 Rust 工具链
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 2. 安装 cargo-aur
+      - name: Install cargo-aur
+        run: cargo install cargo-aur
+
+      # 3. 设置 Git 用户信息 (AUR 需要提交者信息)
+      - name: Configure Git
+        run: |
+          git config --global user.name "MareDevi"
+          git config --global user.email "me@maredevi.moe"
+
+      # 4. 生成 PKGBUILD 并推送到 AUR
+      - name: Build and Publish to AUR
+        run: |
+          cargo aur
+
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+
+          echo "Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            StrictHostKeyChecking no" >> ~/.ssh/config
+
+          APP_NAME=$(grep -m1 'name =' Cargo.toml | cut -d '"' -f 2)
+          git clone "ssh://aur@aur.archlinux.org/${APP_NAME}.git" aur-repo
+
+          cp target/cargo-aur/PKGBUILD aur-repo/
+
+          cd aur-repo
+          makepkg --printsrcinfo > .SRCINFO
+
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to ${{ github.event.release.tag_name }}"
+          git push

@@ -35,3 +35,6 @@ opt-level = "z"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[package.metadata.aur]
+depends = ["mpv", "yt-dlp"]

@@ -4,7 +4,7 @@
 
 ![Rust](https://img.shields.io/badge/Rust-stable-orange)
 ![License](https://img.shields.io/badge/License-MIT-blue)
-![Version](https://img.shields.io/badge/version-0.1.0-green)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/maredevi/bilibili-tui?label=version&color=green)
 
 一个基于终端用户界面（TUI）的 Bilibili 客户端，使用 Rust 构建，提供轻量级且高效的 Bilibili 浏览体验。
 
@@ -498,6 +498,6 @@ RUST_LOG=debug cargo run
 
 **🌟 如果这个项目对你有帮助，请给个 Star 支持！**
 
-Made with ❤️ by the community
+Made with ❤️ by MareDevi
 
 </div>
