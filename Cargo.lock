@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "bilibili-tui"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "catppuccin",
