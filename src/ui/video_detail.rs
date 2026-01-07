@@ -532,7 +532,19 @@ impl Component for VideoDetailPage {
     fn handle_input(&mut self, key: KeyCode) -> Option<AppAction> {
         match key {
             KeyCode::Char('q') | KeyCode::Esc => Some(AppAction::BackToList),
-            KeyCode::Char('p') => Some(AppAction::PlayVideo(self.bvid.clone())),
+            KeyCode::Char('p') => {
+                let (cid, duration) = if let Some(ref info) = self.video_info {
+                    (info.cid, info.duration.unwrap_or(0))
+                } else {
+                    (0, 0)
+                };
+                Some(AppAction::PlayVideo {
+                    bvid: self.bvid.clone(),
+                    aid: self.aid,
+                    cid,
+                    duration,
+                })
+            }
             KeyCode::Char('r') => {
                 if self.focus == DetailFocus::Comments {
                     Some(AppAction::ToggleCommentReplies)

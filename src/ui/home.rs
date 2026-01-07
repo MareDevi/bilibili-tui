@@ -377,10 +377,10 @@ impl Component for HomePage {
                 Some(AppAction::None)
             }
             KeyCode::Char('p') => {
-                // Direct play without going to detail
                 if let Some(card) = self.videos.get(self.selected_index) {
                     if let Some(bvid) = &card.video.bvid {
-                        return Some(AppAction::PlayVideo(bvid.clone()));
+                        let aid = card.video.id;
+                        return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
                     }
                 }
                 Some(AppAction::None)

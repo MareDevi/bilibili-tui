@@ -16,7 +16,7 @@ pub enum BilibiliApiDomain {
 }
 
 impl BilibiliApiDomain {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             BilibiliApiDomain::Main => "https://api.bilibili.com",
             BilibiliApiDomain::Passport => "https://passport.bilibili.com",
@@ -92,6 +92,49 @@ impl ApiClient {
         if let Some(ref cookies) = *self.cookies.read().unwrap() {
             req = req.header(COOKIE, cookies.as_str());
         }
+        let resp = req.send().await?;
+        let api_resp: ApiResponse<T> = resp.json().await?;
+        Ok(api_resp)
+    }
+
+    /// Make a POST request with form data
+    pub async fn post<T: for<'de> Deserialize<'de>>(
+        &self,
+        url: &str,
+        form_data: Vec<(&str, String)>,
+    ) -> Result<ApiResponse<T>> {
+        let mut req = self.client.post(url);
+
+        if let Some(ref cookies) = *self.cookies.read().unwrap() {
+            req = req.header(COOKIE, cookies.as_str());
+        }
+
+        let has_csrf = if let Some(ref cookies) = *self.cookies.read().unwrap() {
+            cookies.contains("bili_jct")
+        } else {
+            false
+        };
+
+        let mut params = Vec::new();
+        for (key, value) in form_data {
+            params.push((key.to_string(), value));
+        }
+
+        if has_csrf && !params.iter().any(|(k, _)| k == "csrf") {
+            if let Some(ref cookies) = *self.cookies.read().unwrap() {
+                for part in cookies.split(';') {
+                    let part = part.trim();
+                    if let Some((name, value)) = part.split_once('=') {
+                        if name == "bili_jct" {
+                            params.push(("csrf".to_string(), value.to_string()));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        req = req.form(&params);
         let resp = req.send().await?;
         let api_resp: ApiResponse<T> = resp.json().await?;
         Ok(api_resp)

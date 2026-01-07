@@ -198,9 +198,23 @@ impl App {
                 self.current_page = Page::Home(HomePage::new());
                 self.init_current_page().await;
             }
-            AppAction::PlayVideo(bvid) => {
-                // Launch mpv player
-                if let Err(e) = crate::player::play_video(&bvid, self.credentials.as_ref()).await {
+            AppAction::PlayVideo {
+                bvid,
+                aid,
+                cid,
+                duration,
+            } => {
+                let api_client = self.api_client.clone();
+                if let Err(e) = crate::player::play_video(
+                    api_client,
+                    &bvid,
+                    aid,
+                    cid,
+                    duration,
+                    self.credentials.as_ref(),
+                )
+                .await
+                {
                     eprintln!("Failed to play video: {}", e);
                 }
             }

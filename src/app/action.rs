@@ -14,8 +14,13 @@ pub enum AppAction {
     SwitchToSettings,
     /// Login was successful with credentials
     LoginSuccess(Credentials),
-    /// Play a video by bvid
-    PlayVideo(String),
+    /// Play a video with metadata (bvid, aid, cid, duration)
+    PlayVideo {
+        bvid: String,
+        aid: i64,
+        cid: i64,
+        duration: i64,
+    },
     /// Navigate to next sidebar item
     NavNext,
     /// Navigate to previous sidebar item

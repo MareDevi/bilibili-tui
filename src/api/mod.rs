@@ -2,6 +2,7 @@ pub mod auth;
 pub mod client;
 pub mod comment;
 pub mod dynamic;
+pub mod heartbeat;
 pub mod recommend;
 pub mod search;
 pub mod video;

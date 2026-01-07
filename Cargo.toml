@@ -10,6 +10,7 @@ repository = "https://github.com/MareDevi/bilibili-tui"
 [dependencies]
 anyhow = "1.0.100"
 catppuccin = { version = "2.6.0", features = ["ratatui"] }
+chrono = "0.4"
 color-eyre = "0.6.5"
 crossterm = "0.29.0"
 dirs = "5.0"
