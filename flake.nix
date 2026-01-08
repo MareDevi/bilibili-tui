@@ -35,7 +35,8 @@
 
             # Build
             pkg-config
-            openssl
+            openssl.dev
+            openssl.out
 
             # Runtime
             mpv
@@ -51,7 +52,7 @@
             muslPkgs.stdenv.cc
           ];
 
-          # OpenSSL for native builds
+          # OpenSSL for native builds (dynamic linking)
           OPENSSL_DIR = "${pkgs.openssl.dev}";
           OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib";
           OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
@@ -60,8 +61,8 @@
           CC_x86_64_unknown_linux_musl = "${muslPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-cc";
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "${muslPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-cc";
 
-          # OpenSSL for musl target (static)
-          OPENSSL_STATIC = "1";
+          # OpenSSL for musl target (static) - target-specific env vars
+          X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_STATIC = "1";
           X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_DIR = "${opensslMusl.dev}";
           X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_LIB_DIR = "${opensslMusl.out}/lib";
           X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_INCLUDE_DIR = "${opensslMusl.dev}/include";
