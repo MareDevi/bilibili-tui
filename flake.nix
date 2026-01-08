@@ -10,10 +10,15 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        overlays = [ (import rust-overlay) ];
+  outputs = {
+    self,
+    nixpkgs,
+    flake-utils,
+    rust-overlay,
+  }:
+    flake-utils.lib.eachDefaultSystem (
+      system: let
+        overlays = [(import rust-overlay)];
         pkgs = import nixpkgs {
           inherit system overlays;
         };
@@ -23,11 +28,15 @@
         opensslMusl = muslPkgs.pkgsStatic.openssl;
 
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" "rust-analyzer" ];
-          targets = [ "x86_64-unknown-linux-musl" ];
+          extensions = [
+            "rust-src"
+            "rust-analyzer"
+          ];
+          targets = ["x86_64-unknown-linux-musl"];
         };
-      in
-      {
+      in {
+        formatter = pkgs.alejandra;
+
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             # Rust toolchain
