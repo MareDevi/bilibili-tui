@@ -5,8 +5,13 @@ use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::dynamic::DynamicItem;
 use crate::app::AppAction;
-use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
+use ratatui::{
+    crossterm::event::{KeyCode, MouseButton, MouseEvent},
+    prelude::*,
+    widgets::*,
+};
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// Dynamic feed tab types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,10 +57,12 @@ pub struct DynamicPage {
     pub current_tab: DynamicTab,
     pub tab_offsets: HashMap<DynamicTab, Option<String>>,
     pub up_list: Vec<crate::api::dynamic::UpListItem>,
-    pub selected_up_index: usize, // 0 = "全部动态", 1+ = specific UP
+    pub selected_up_index: usize,
     pub loading_up_list: bool,
-    pub up_list_scroll_offset: usize, // Horizontal scroll offset for UP list
-    pub dynamic_items: Vec<DynamicItem>, // Store original dynamic items for detail viewing
+    pub up_list_scroll_offset: usize,
+    pub dynamic_items: Vec<DynamicItem>,
+    last_click_time: Option<Instant>,
+    last_click_index: Option<usize>,
 }
 
 impl DynamicPage {
@@ -74,6 +81,8 @@ impl DynamicPage {
             loading_up_list: false,
             up_list_scroll_offset: 0,
             dynamic_items: Vec::new(),
+            last_click_time: None,
+            last_click_index: None,
         }
     }
 
@@ -687,6 +696,84 @@ impl Component for DynamicPage {
             (KeyCode::Char('q'), KeyModifiers::NONE) => Some(AppAction::Quit),
 
             _ => Some(AppAction::None),
+        }
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> Option<AppAction> {
+        use crossterm::event::MouseEventKind;
+
+        match event.kind {
+            MouseEventKind::ScrollDown => {
+                if self.grid.move_down()
+                    && self.grid.is_near_bottom(3)
+                    && !self.loading_more
+                    && self.has_more
+                {
+                    return Some(AppAction::LoadMoreDynamic);
+                }
+                None
+            }
+            MouseEventKind::ScrollUp => {
+                self.grid.move_up();
+                None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(3),
+                        Constraint::Length(5),
+                        Constraint::Min(10),
+                        Constraint::Length(2),
+                    ])
+                    .split(area);
+
+                let grid_area = chunks[2];
+
+                if !grid_area.contains(ratatui::layout::Position::new(event.column, event.row)) {
+                    return None;
+                }
+
+                let relative_y = event.row - grid_area.y;
+                let click_row = (relative_y / self.grid.card_height) as usize;
+                let actual_row = self.grid.scroll_row + click_row;
+
+                let card_width = grid_area.width / self.grid.columns as u16;
+                let click_col = (event.column.saturating_sub(grid_area.x) / card_width) as usize;
+
+                let click_idx = actual_row * self.grid.columns + click_col;
+
+                if click_idx < self.grid.cards.len() {
+                    let now = Instant::now();
+                    let is_double_click = self.last_click_index == Some(click_idx)
+                        && self
+                            .last_click_time
+                            .is_some_and(|t| now.duration_since(t).as_millis() < 500);
+
+                    if is_double_click {
+                        self.last_click_time = None;
+                        self.last_click_index = None;
+                        if let Some(card) = self.grid.cards.get(click_idx) {
+                            if let Some(ref bvid) = card.bvid {
+                                return Some(AppAction::OpenVideoDetail(bvid.clone(), 0));
+                            } else if let Some(item) = self.dynamic_items.get(click_idx) {
+                                if item.is_draw() || item.is_opus() {
+                                    if let Some(id) = &item.id_str {
+                                        return Some(AppAction::OpenDynamicDetail(id.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        self.grid.selected_index = click_idx;
+                        self.grid.update_scroll(self.grid.cached_visible_rows);
+                        self.last_click_time = Some(now);
+                        self.last_click_index = Some(click_idx);
+                    }
+                }
+                None
+            }
+            _ => None,
         }
     }
 }

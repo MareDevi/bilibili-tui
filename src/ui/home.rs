@@ -5,10 +5,15 @@ use crate::api::client::ApiClient;
 use crate::api::recommend::VideoItem;
 use crate::app::AppAction;
 use image::DynamicImage;
-use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
+use ratatui::{
+    crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind},
+    prelude::*,
+    widgets::*,
+};
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 /// Video card with cached cover image
@@ -38,6 +43,9 @@ pub struct HomePage {
     pending_downloads: HashSet<usize>,
     fresh_idx: i32,
     loading_more: bool,
+    // Double-click detection
+    last_click_time: Option<Instant>,
+    last_click_index: Option<usize>,
 }
 
 impl HomePage {
@@ -72,6 +80,8 @@ impl HomePage {
             pending_downloads: HashSet::new(),
             fresh_idx: 1,
             loading_more: false,
+            last_click_time: None,
+            last_click_index: None,
         }
     }
 
@@ -267,7 +277,7 @@ impl Component for HomePage {
                 )
                 .alignment(Alignment::Center);
             frame.render_widget(loading, chunks[1]);
-        } else if let Some(ref error) = self.error_message {
+        } else if let Some(error) = &self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
                 .style(Style::default().fg(theme.error))
                 .alignment(Alignment::Center);
@@ -406,6 +416,90 @@ impl Component for HomePage {
             _ => Some(AppAction::None),
         }
     }
+
+    fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> Option<AppAction> {
+        match event.kind {
+            MouseEventKind::ScrollDown => {
+                // Scroll down by one row
+                if !self.videos.is_empty() {
+                    let new_idx = self.selected_index + self.columns;
+                    if new_idx < self.videos.len() {
+                        self.selected_index = new_idx;
+                        self.update_scroll(Self::DEFAULT_VISIBLE_ROWS);
+                        // Check for pagination only when actually moved
+                        if self.is_near_bottom(Self::DEFAULT_VISIBLE_ROWS) && !self.loading_more {
+                            return Some(AppAction::LoadMoreRecommendations);
+                        }
+                    }
+                }
+                None
+            }
+            MouseEventKind::ScrollUp => {
+                // Scroll up by one row
+                if !self.videos.is_empty() && self.selected_index >= self.columns {
+                    self.selected_index -= self.columns;
+                    self.update_scroll(Self::DEFAULT_VISIBLE_ROWS);
+                }
+                None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Check if click is within content area (below header, above help)
+                let content_top = area.y + 3; // After header
+                let content_bottom = area.y + area.height.saturating_sub(2); // Before help
+
+                if event.row >= content_top && event.row < content_bottom {
+                    // Calculate which card was clicked
+                    let relative_y = event.row - content_top;
+                    let click_row = (relative_y / self.card_height) as usize;
+                    let actual_row = self.scroll_row + click_row;
+
+                    let card_width = area.width / self.columns as u16;
+                    let click_col = (event.column.saturating_sub(area.x) / card_width) as usize;
+
+                    let click_idx = actual_row * self.columns + click_col.min(self.columns - 1);
+
+                    if click_idx < self.videos.len() {
+                        // Check for double-click (same card within 500ms)
+                        let now = Instant::now();
+                        let is_double_click = self.last_click_index == Some(click_idx)
+                            && self
+                                .last_click_time
+                                .is_some_and(|t| now.duration_since(t).as_millis() < 500);
+
+                        if is_double_click {
+                            // Double-click: open video detail
+                            self.last_click_time = None;
+                            self.last_click_index = None;
+                            if let Some(card) = self.videos.get(click_idx) {
+                                if let Some(bvid) = &card.video.bvid {
+                                    let aid = card.video.id;
+                                    return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
+                                }
+                            }
+                        } else {
+                            // Single click: select card and record for potential double-click
+                            self.selected_index = click_idx;
+                            self.update_scroll(Self::DEFAULT_VISIBLE_ROWS);
+                            self.last_click_time = Some(now);
+                            self.last_click_index = Some(click_idx);
+                        }
+                    }
+                }
+                None
+            }
+            MouseEventKind::Down(MouseButton::Middle) => {
+                // Middle click opens video detail
+                if let Some(card) = self.videos.get(self.selected_index) {
+                    if let Some(bvid) = &card.video.bvid {
+                        let aid = card.video.id;
+                        return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
 }
 
 impl HomePage {
@@ -507,7 +601,7 @@ impl HomePage {
 
         // Cover area - render with StatefulImage
         let cover_area = card_chunks[0];
-        if let Some(ref mut cover) = self.videos[video_idx].cover {
+        if let Some(cover) = &mut self.videos[video_idx].cover {
             // Render actual image using StatefulImage
             let image_widget = StatefulImage::new();
             frame.render_stateful_widget(image_widget, cover_area, cover);

@@ -5,7 +5,12 @@ use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::search::SearchVideoItem;
 use crate::app::AppAction;
-use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
+use ratatui::{
+    crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind},
+    prelude::*,
+    widgets::*,
+};
+use std::time::Instant;
 
 pub struct SearchPage {
     pub query: String,
@@ -16,6 +21,8 @@ pub struct SearchPage {
     pub page: i32,
     pub total_results: i32,
     pub loading_more: bool,
+    last_click_time: Option<Instant>,
+    last_click_index: Option<usize>,
 }
 
 impl SearchPage {
@@ -29,6 +36,8 @@ impl SearchPage {
             page: 1,
             total_results: 0,
             loading_more: false,
+            last_click_time: None,
+            last_click_index: None,
         }
     }
 
@@ -169,7 +178,7 @@ impl Component for SearchPage {
                         )),
                 );
             frame.render_widget(loading, chunks[1]);
-        } else if let Some(ref error) = self.error_message {
+        } else if let Some(error) = &self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
                 .style(Style::default().fg(theme.error))
                 .alignment(Alignment::Center)
@@ -293,7 +302,7 @@ impl Component for SearchPage {
                 }
                 KeyCode::Enter => {
                     if let Some(card) = self.grid.selected_card() {
-                        if let (Some(ref bvid), Some(aid)) = (&card.bvid, card.aid) {
+                        if let (Some(bvid), Some(aid)) = (&card.bvid, card.aid) {
                             return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
                         }
                     }
@@ -307,6 +316,85 @@ impl Component for SearchPage {
                 KeyCode::Char('q') => Some(AppAction::Quit),
                 _ => Some(AppAction::None),
             }
+        }
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> Option<AppAction> {
+        // Don't handle mouse in input mode
+        if self.input_mode {
+            return None;
+        }
+
+        match event.kind {
+            MouseEventKind::ScrollDown => {
+                if self.grid.move_down() {
+                    // Only check pagination if actually moved
+                    if self.grid.is_near_bottom(3) && !self.loading_more {
+                        return Some(AppAction::LoadMoreSearch);
+                    }
+                }
+                None
+            }
+            MouseEventKind::ScrollUp => {
+                self.grid.move_up();
+                None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(3),
+                        Constraint::Min(10),
+                        Constraint::Length(2),
+                    ])
+                    .split(area);
+
+                let header_height = 2u16;
+                let grid_area = Rect {
+                    y: chunks[1].y + header_height,
+                    height: chunks[1].height.saturating_sub(header_height),
+                    x: chunks[1].x,
+                    width: chunks[1].width,
+                };
+
+                if !grid_area.contains(ratatui::layout::Position::new(event.column, event.row)) {
+                    return None;
+                }
+
+                let relative_y = event.row - grid_area.y;
+                let click_row = (relative_y / self.grid.card_height) as usize;
+                let actual_row = self.grid.scroll_row + click_row;
+
+                let card_width = grid_area.width / self.grid.columns as u16;
+                let click_col = (event.column.saturating_sub(grid_area.x) / card_width) as usize;
+
+                let click_idx = actual_row * self.grid.columns + click_col;
+
+                if click_idx < self.grid.cards.len() {
+                    let now = Instant::now();
+                    let is_double_click = self.last_click_index == Some(click_idx)
+                        && self
+                            .last_click_time
+                            .is_some_and(|t| now.duration_since(t).as_millis() < 500);
+
+                    if is_double_click {
+                        self.last_click_time = None;
+                        self.last_click_index = None;
+                        if let Some(card) = self.grid.cards.get(click_idx) {
+                            if let (Some(bvid), Some(aid)) = (&card.bvid, card.aid) {
+                                return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
+                            }
+                        }
+                    } else {
+                        self.grid.selected_index = click_idx;
+                        self.grid.update_scroll(self.grid.cached_visible_rows);
+                        self.last_click_time = Some(now);
+                        self.last_click_index = Some(click_idx);
+                    }
+                }
+                None
+            }
+            _ => None,
         }
     }
 }

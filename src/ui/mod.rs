@@ -24,7 +24,7 @@ pub use video_detail::VideoDetailPage;
 
 use crate::app::AppAction;
 use ratatui::{
-    crossterm::event::{KeyCode, KeyModifiers},
+    crossterm::event::{KeyCode, KeyModifiers, MouseEvent},
     prelude::Rect,
     Frame,
 };
@@ -43,6 +43,10 @@ pub trait Component {
     ) -> Option<AppAction> {
         let _ = modifiers;
         self.handle_input(key)
+    }
+    fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> Option<AppAction> {
+        let _ = (event, area);
+        None
     }
 }
 

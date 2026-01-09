@@ -6,7 +6,11 @@ use crate::api::comment::CommentItem;
 use crate::api::dynamic::DynamicItem;
 use crate::app::AppAction;
 use image::DynamicImage;
-use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
+use ratatui::{
+    crossterm::event::{KeyCode, MouseEvent, MouseEventKind},
+    prelude::*,
+    widgets::*,
+};
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -531,6 +535,39 @@ impl Component for DynamicDetailPage {
                 Some(AppAction::None)
             }
             _ => Some(AppAction::None),
+        }
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> Option<AppAction> {
+        // Don't handle mouse in input mode
+        if self.input_mode {
+            return None;
+        }
+
+        match event.kind {
+            MouseEventKind::ScrollDown => {
+                // Scroll down comments
+                if self.selected_comment + 1 < self.comments.len() {
+                    self.selected_comment += 1;
+                }
+                let comment_blocks = self.get_comment_lines();
+                let total_lines: usize = comment_blocks.iter().map(|b| b.len()).sum();
+                if self.comment_scroll + 1 < total_lines {
+                    self.comment_scroll += 1;
+                }
+                None
+            }
+            MouseEventKind::ScrollUp => {
+                // Scroll up comments
+                if self.selected_comment > 0 {
+                    self.selected_comment -= 1;
+                }
+                if self.comment_scroll > 0 {
+                    self.comment_scroll -= 1;
+                }
+                None
+            }
+            _ => None,
         }
     }
 }

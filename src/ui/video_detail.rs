@@ -6,8 +6,13 @@ use crate::api::client::ApiClient;
 use crate::api::comment::CommentItem;
 use crate::api::video::{RelatedVideoItem, VideoInfo};
 use crate::app::AppAction;
-use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
+use ratatui::{
+    crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind},
+    prelude::*,
+    widgets::*,
+};
 use std::collections::HashSet;
+use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum DetailFocus {
@@ -30,21 +35,21 @@ pub struct VideoDetailPage {
     pub focus: DetailFocus,
     pub has_more_comments: bool,
     pub loading_more_comments: bool,
-    // Comment reply support
-    pub expanded_comment: Option<i64>, // rpid of expanded comment
-    pub comment_replies: Vec<CommentItem>, // replies for expanded comment
+    pub expanded_comment: Option<i64>,
+    pub comment_replies: Vec<CommentItem>,
     pub loading_replies: bool,
-    // Comment action support
-    pub liked_comments: HashSet<i64>, // rpids of liked comments
-    pub input_mode: bool,             // comment input mode
-    pub input_buffer: String,         // comment input buffer
+    pub liked_comments: HashSet<i64>,
+    pub input_mode: bool,
+    pub input_buffer: String,
+    last_click_time: Option<Instant>,
+    last_click_index: Option<usize>,
 }
 
 impl VideoDetailPage {
     pub fn new(bvid: String, aid: i64) -> Self {
         let mut related_card_grid = VideoCardGrid::new();
-        related_card_grid.columns = 2; // Two columns for compact layout
-        related_card_grid.card_height = 8; // Compact cards for sidebar
+        related_card_grid.columns = 2;
+        related_card_grid.card_height = 8;
 
         Self {
             bvid,
@@ -67,6 +72,8 @@ impl VideoDetailPage {
             liked_comments: HashSet::new(),
             input_mode: false,
             input_buffer: String::new(),
+            last_click_time: None,
+            last_click_index: None,
         }
     }
 
@@ -280,7 +287,7 @@ impl VideoDetailPage {
             frame.render_widget(stats, chunks[2]);
 
             // Description
-            if let Some(ref desc) = info.desc {
+            if let Some(desc) = &info.desc {
                 let char_count = desc.chars().count();
                 let desc_text: String = if char_count > 100 {
                     desc.chars().take(100).collect::<String>() + "..."
@@ -518,7 +525,7 @@ impl Component for VideoDetailPage {
                         .border_type(BorderType::Rounded),
                 );
             frame.render_widget(loading, chunks[1]);
-        } else if let Some(ref error) = self.error_message {
+        } else if let Some(error) = &self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
                 .style(Style::default().fg(theme.error))
                 .alignment(Alignment::Center)
@@ -617,7 +624,7 @@ impl Component for VideoDetailPage {
         match key {
             KeyCode::Char('q') | KeyCode::Esc => Some(AppAction::BackToList),
             KeyCode::Char('p') => {
-                let (cid, duration) = if let Some(ref info) = self.video_info {
+                let (cid, duration) = if let Some(info) = &self.video_info {
                     (info.cid, info.duration.unwrap_or(0))
                 } else {
                     (0, 0)
@@ -714,7 +721,7 @@ impl Component for VideoDetailPage {
                     }
                     DetailFocus::Related => {
                         if let Some(card) = self.related_card_grid.selected_card() {
-                            if let Some(ref bvid) = card.bvid {
+                            if let Some(bvid) = &card.bvid {
                                 let aid = card.aid.unwrap_or(0);
                                 return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
                             }
@@ -724,6 +731,123 @@ impl Component for VideoDetailPage {
                 }
             }
             _ => Some(AppAction::None),
+        }
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> Option<AppAction> {
+        if self.input_mode {
+            return None;
+        }
+
+        match event.kind {
+            MouseEventKind::ScrollDown => {
+                match self.focus {
+                    DetailFocus::Comments => {
+                        if self.comment_scroll + 1 < self.comments.len() {
+                            self.comment_scroll += 1;
+                            if self.is_near_comments_bottom(10)
+                                && self.has_more_comments
+                                && !self.loading_more_comments
+                            {
+                                return Some(AppAction::LoadMoreComments);
+                            }
+                        }
+                    }
+                    DetailFocus::Related => {
+                        if self.related_card_grid.move_down() {
+                            self.related_scroll = self.related_card_grid.selected_index;
+                        }
+                    }
+                }
+                None
+            }
+            MouseEventKind::ScrollUp => {
+                match self.focus {
+                    DetailFocus::Comments => {
+                        if self.comment_scroll > 0 {
+                            self.comment_scroll -= 1;
+                        }
+                    }
+                    DetailFocus::Related => {
+                        if self.related_card_grid.move_up() {
+                            self.related_scroll = self.related_card_grid.selected_index;
+                        }
+                    }
+                }
+                None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.focus != DetailFocus::Related {
+                    return None;
+                }
+
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(6),
+                        Constraint::Min(10),
+                        Constraint::Length(2),
+                    ])
+                    .split(area);
+
+                if self.loading {
+                    return None;
+                }
+
+                if let Some(error) = &self.error_message {
+                    if error.contains("视频信息") || error.contains("加载视频") {
+                        return None;
+                    }
+                }
+
+                let content_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .split(chunks[1]);
+
+                let related_area = content_chunks[1];
+
+                if !related_area.contains(ratatui::layout::Position::new(event.column, event.row)) {
+                    return None;
+                }
+
+                let relative_y = event.row - related_area.y;
+                let click_row = (relative_y / self.related_card_grid.card_height) as usize;
+                let actual_row = self.related_card_grid.scroll_row + click_row;
+
+                let card_width = related_area.width / self.related_card_grid.columns as u16;
+                let click_col = (event.column.saturating_sub(related_area.x) / card_width) as usize;
+
+                let click_idx = actual_row * self.related_card_grid.columns + click_col;
+
+                if click_idx < self.related_card_grid.cards.len() {
+                    let now = Instant::now();
+                    let is_double_click = self.last_click_index == Some(click_idx)
+                        && self
+                            .last_click_time
+                            .is_some_and(|t| now.duration_since(t).as_millis() < 500);
+
+                    if is_double_click {
+                        self.last_click_time = None;
+                        self.last_click_index = None;
+                        if let Some(card) = self.related_card_grid.cards.get(click_idx) {
+                            if let Some(ref bvid) = card.bvid {
+                                let aid = card.aid.unwrap_or(0);
+                                return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
+                            }
+                        }
+                    } else {
+                        self.related_card_grid.selected_index = click_idx;
+                        self.related_card_grid
+                            .update_scroll(self.related_card_grid.cached_visible_rows);
+                        self.related_scroll = self.related_card_grid.selected_index;
+                        self.last_click_time = Some(now);
+                        self.last_click_index = Some(click_idx);
+                    }
+                }
+                None
+            }
+            _ => None,
         }
     }
 }

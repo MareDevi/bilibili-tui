@@ -5,10 +5,15 @@ use crate::api::client::ApiClient;
 use crate::api::history::{HistoryCursor, HistoryItem};
 use crate::app::AppAction;
 use image::DynamicImage;
-use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
+use ratatui::{
+    crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind},
+    prelude::*,
+    widgets::*,
+};
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 /// History card with cached cover image
@@ -33,10 +38,12 @@ pub struct HistoryPage {
     cursor: Option<HistoryCursor>,
     has_more: bool,
 
-    // Cover download tracking
     pending_downloads: HashSet<usize>,
     cover_rx: mpsc::Receiver<CoverResult>,
     cover_tx: mpsc::Sender<CoverResult>,
+
+    last_click_time: Option<Instant>,
+    last_click_index: Option<usize>,
 }
 
 impl HistoryPage {
@@ -56,6 +63,8 @@ impl HistoryPage {
             pending_downloads: HashSet::new(),
             cover_rx: rx,
             cover_tx: tx,
+            last_click_time: None,
+            last_click_index: None,
         }
     }
 
@@ -89,7 +98,7 @@ impl HistoryPage {
             return;
         }
 
-        let Some(ref cursor) = self.cursor else {
+        let Some(cursor) = &self.cursor else {
             return;
         };
 
@@ -316,6 +325,76 @@ impl Component for HistoryPage {
             KeyCode::Tab => Some(AppAction::NavNext),
             KeyCode::BackTab => Some(AppAction::NavPrev),
             KeyCode::Char('t') => Some(AppAction::NextTheme),
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> Option<AppAction> {
+        let cols = 4;
+        let total = self.items.len();
+
+        match event.kind {
+            MouseEventKind::ScrollDown => {
+                if self.selected + cols < total {
+                    self.selected += cols;
+                    if self.is_near_bottom(4) {
+                        return Some(AppAction::LoadMoreHistory);
+                    }
+                }
+                None
+            }
+            MouseEventKind::ScrollUp => {
+                if self.selected >= cols {
+                    self.selected -= cols;
+                }
+                None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let inner = area.inner(Margin::new(1, 1));
+
+                if !inner.contains(ratatui::layout::Position::new(event.column, event.row)) {
+                    return None;
+                }
+
+                let card_height = 12u16;
+                let card_width = inner.width / cols as u16;
+
+                let relative_y = event.row - inner.y;
+                let click_row = (relative_y / card_height) as usize;
+                let actual_row = self.scroll_offset + click_row;
+
+                let click_col = (event.column.saturating_sub(inner.x) / card_width) as usize;
+
+                let click_idx = actual_row * cols + click_col;
+
+                if click_idx < self.items.len() {
+                    let now = Instant::now();
+                    let is_double_click = self.last_click_index == Some(click_idx)
+                        && self
+                            .last_click_time
+                            .is_some_and(|t| now.duration_since(t).as_millis() < 500);
+
+                    if is_double_click {
+                        self.last_click_time = None;
+                        self.last_click_index = None;
+                        if let Some(card) = self.items.get(click_idx) {
+                            if card.item.is_video() {
+                                if let Some(bvid) = card.item.get_bvid() {
+                                    let aid = card.item.history.oid;
+                                    return Some(AppAction::OpenVideoDetail(bvid.to_string(), aid));
+                                }
+                            }
+                        }
+                    } else {
+                        self.selected = click_idx;
+                        let visible_rows = self.visible_rows(area.height);
+                        self.update_scroll(visible_rows);
+                        self.last_click_time = Some(now);
+                        self.last_click_index = Some(click_idx);
+                    }
+                }
+                None
+            }
             _ => None,
         }
     }
