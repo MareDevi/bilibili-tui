@@ -37,6 +37,11 @@ pub struct DynamicDetailPage {
     image_tx: mpsc::Sender<ImageResult>,
     image_rx: mpsc::Receiver<ImageResult>,
     pending_downloads: HashSet<usize>,
+    // Comment action support
+    pub liked_comments: HashSet<i64>,
+    pub input_mode: bool,
+    pub input_buffer: String,
+    pub selected_comment: usize,
 }
 
 impl DynamicDetailPage {
@@ -62,6 +67,10 @@ impl DynamicDetailPage {
             image_tx,
             image_rx,
             pending_downloads: HashSet::new(),
+            liked_comments: HashSet::new(),
+            input_mode: false,
+            input_buffer: String::new(),
+            selected_comment: 0,
         }
     }
 
@@ -301,14 +310,27 @@ impl Component for DynamicDetailPage {
             self.start_image_downloads();
         }
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(10),   // Main content
-                Constraint::Length(2), // Help
-            ])
-            .split(area);
+        // Adjust layout based on input mode
+        let chunks = if self.input_mode {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // Title
+                    Constraint::Min(8),    // Main content
+                    Constraint::Length(3), // Input box
+                    Constraint::Length(2), // Help
+                ])
+                .split(area)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // Title
+                    Constraint::Min(10),   // Main content
+                    Constraint::Length(2), // Help
+                ])
+                .split(area)
+        };
 
         // Title
         let title_text = if let Some(ref item) = self.dynamic_item {
@@ -365,21 +387,92 @@ impl Component for DynamicDetailPage {
             self.draw_main_layout(frame, chunks[1], theme);
         }
 
+        // Input box (only in input mode)
+        if self.input_mode {
+            let input_block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.bilibili_pink))
+                .title(Span::styled(
+                    " ✏️ 发表评论 ",
+                    Style::default()
+                        .fg(theme.bilibili_pink)
+                        .add_modifier(Modifier::BOLD),
+                ));
+
+            let input_text = format!("{}_", self.input_buffer);
+            let input = Paragraph::new(input_text)
+                .style(Style::default().fg(theme.fg_primary))
+                .block(input_block);
+            frame.render_widget(input, chunks[2]);
+        }
+
         // Help
-        let help_text = if !self.image_urls.is_empty() {
-            "[h/l] 切换图片  [j/k] 滚动  [n] 加载更多评论  [q/Esc] 返回"
+        let help_chunk = if self.input_mode {
+            chunks[3]
         } else {
-            "[j/k] 滚动  [n] 加载更多评论  [q/Esc] 返回"
+            chunks[2]
+        };
+        let help_text = if self.input_mode {
+            "[Enter] 发送评论  [Esc] 取消"
+        } else if !self.image_urls.is_empty() {
+            "[h/l] 图片  [j/k] 滚动  [Enter] 点赞  [c] 评论  [n] 加载更多  [q] 返回"
+        } else {
+            "[j/k] 滚动  [Enter] 点赞  [c] 评论  [n] 加载更多  [q] 返回"
         };
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(theme.fg_secondary))
             .alignment(Alignment::Center);
-        frame.render_widget(help, chunks[2]);
+        frame.render_widget(help, help_chunk);
     }
 
     fn handle_input(&mut self, key: KeyCode) -> Option<AppAction> {
+        // Handle input mode for adding comments
+        if self.input_mode {
+            match key {
+                KeyCode::Esc => {
+                    self.input_mode = false;
+                    self.input_buffer.clear();
+                    return Some(AppAction::None);
+                }
+                KeyCode::Enter => {
+                    if !self.input_buffer.is_empty() {
+                        if let Some(ref item) = self.dynamic_item {
+                            let comment_type = item.comment_type();
+                            if let Some(oid) = item.comment_oid(&self.dynamic_id) {
+                                let message = self.input_buffer.clone();
+                                self.input_buffer.clear();
+                                self.input_mode = false;
+                                return Some(AppAction::AddComment {
+                                    oid,
+                                    comment_type,
+                                    message,
+                                    root: None,
+                                });
+                            }
+                        }
+                    }
+                    return Some(AppAction::None);
+                }
+                KeyCode::Backspace => {
+                    self.input_buffer.pop();
+                    return Some(AppAction::None);
+                }
+                KeyCode::Char(c) => {
+                    self.input_buffer.push(c);
+                    return Some(AppAction::None);
+                }
+                _ => return Some(AppAction::None),
+            }
+        }
+
         match key {
             KeyCode::Char('q') | KeyCode::Esc => Some(AppAction::BackToList),
+            KeyCode::Char('c') => {
+                self.input_mode = true;
+                self.input_buffer.clear();
+                Some(AppAction::None)
+            }
             KeyCode::Char('h') | KeyCode::Left => {
                 // Previous image
                 if !self.image_urls.is_empty() && self.current_image_index > 0 {
@@ -399,7 +492,10 @@ impl Component for DynamicDetailPage {
                 Some(AppAction::LoadMoreComments)
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                // Scroll down
+                // Scroll down and track selected comment
+                if self.selected_comment + 1 < self.comments.len() {
+                    self.selected_comment += 1;
+                }
                 let comment_blocks = self.get_comment_lines();
                 let total_lines: usize = comment_blocks.iter().map(|b| b.len()).sum();
                 if self.comment_scroll + 1 < total_lines {
@@ -409,8 +505,28 @@ impl Component for DynamicDetailPage {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 // Scroll up
+                if self.selected_comment > 0 {
+                    self.selected_comment -= 1;
+                }
                 if self.comment_scroll > 0 {
                     self.comment_scroll -= 1;
+                }
+                Some(AppAction::None)
+            }
+            KeyCode::Enter => {
+                // Like the currently selected comment
+                if let Some(ref item) = self.dynamic_item {
+                    if self.selected_comment < self.comments.len() {
+                        let comment = &self.comments[self.selected_comment];
+                        let comment_type = item.comment_type();
+                        if let Some(oid) = item.comment_oid(&self.dynamic_id) {
+                            return Some(AppAction::LikeComment {
+                                oid,
+                                rpid: comment.rpid,
+                                comment_type,
+                            });
+                        }
+                    }
                 }
                 Some(AppAction::None)
             }

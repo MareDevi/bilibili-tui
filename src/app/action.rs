@@ -59,6 +59,19 @@ pub enum AppAction {
     SetTheme(ThemeVariant),
     /// Logout and return to login page
     Logout,
+    /// Like or unlike a comment (oid, rpid, comment_type)
+    LikeComment {
+        oid: i64,
+        rpid: i64,
+        comment_type: i32,
+    },
+    /// Add a comment (oid, comment_type, message, optional root rpid for replies)
+    AddComment {
+        oid: i64,
+        comment_type: i32,
+        message: String,
+        root: Option<i64>,
+    },
     /// No action
     None,
 }

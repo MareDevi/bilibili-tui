@@ -503,7 +503,6 @@ impl ApiClient {
             .unwrap_or_default())
     }
 
-    // History API - Get watch history with cursor pagination
     pub async fn get_history(
         &self,
         max: Option<i64>,
@@ -536,6 +535,134 @@ impl ApiClient {
         let resp: ApiResponse<super::history::HistoryData> = self.get(&url).await?;
         resp.data
             .ok_or_else(|| anyhow::anyhow!("No data in history response"))
+    }
+
+    // ========== Comment Action APIs ==========
+
+    /// Add a comment (发表评论)
+    /// - `oid`: Target ID (e.g., video aid)
+    /// - `comment_type`: Comment area type (1=video, 17=dynamic, etc.)
+    /// - `message`: Comment content
+    /// - `root`: Root comment rpid for reply (None for top-level comment)
+    /// - `parent`: Parent comment rpid for reply (None for top-level comment)
+    pub async fn add_comment(
+        &self,
+        oid: i64,
+        comment_type: i32,
+        message: &str,
+        root: Option<i64>,
+        parent: Option<i64>,
+    ) -> Result<super::comment::AddCommentResponse> {
+        let url = self.build_url(BilibiliApiDomain::Main, "/x/v2/reply/add");
+
+        let mut form_data = vec![
+            ("type", comment_type.to_string()),
+            ("oid", oid.to_string()),
+            ("message", message.to_string()),
+            ("plat", "1".to_string()), // Web platform
+        ];
+
+        if let Some(r) = root {
+            form_data.push(("root", r.to_string()));
+        }
+        if let Some(p) = parent {
+            form_data.push(("parent", p.to_string()));
+        }
+
+        let resp: ApiResponse<super::comment::AddCommentResponse> =
+            self.post(&url, form_data).await?;
+
+        if resp.code != 0 {
+            return Err(anyhow::anyhow!("Failed to add comment: {}", resp.message));
+        }
+
+        resp.data
+            .ok_or_else(|| anyhow::anyhow!("No data in add comment response"))
+    }
+
+    /// Like or unlike a comment (点赞/取消点赞评论)
+    /// - `action`: true = like, false = unlike
+    pub async fn like_comment(
+        &self,
+        oid: i64,
+        rpid: i64,
+        comment_type: i32,
+        action: bool,
+    ) -> Result<()> {
+        let url = self.build_url(BilibiliApiDomain::Main, "/x/v2/reply/action");
+
+        let form_data = vec![
+            ("type", comment_type.to_string()),
+            ("oid", oid.to_string()),
+            ("rpid", rpid.to_string()),
+            ("action", if action { "1" } else { "0" }.to_string()),
+        ];
+
+        let resp: ApiResponse<serde_json::Value> = self.post(&url, form_data).await?;
+
+        if resp.code != 0 {
+            return Err(anyhow::anyhow!(
+                "Failed to {} comment: {}",
+                if action { "like" } else { "unlike" },
+                resp.message
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Dislike or un-dislike a comment (点踩/取消点踩评论)
+    /// - `action`: true = dislike, false = un-dislike
+    pub async fn dislike_comment(
+        &self,
+        oid: i64,
+        rpid: i64,
+        comment_type: i32,
+        action: bool,
+    ) -> Result<()> {
+        let url = self.build_url(BilibiliApiDomain::Main, "/x/v2/reply/hate");
+
+        let form_data = vec![
+            ("type", comment_type.to_string()),
+            ("oid", oid.to_string()),
+            ("rpid", rpid.to_string()),
+            ("action", if action { "1" } else { "0" }.to_string()),
+        ];
+
+        let resp: ApiResponse<serde_json::Value> = self.post(&url, form_data).await?;
+
+        if resp.code != 0 {
+            return Err(anyhow::anyhow!(
+                "Failed to {} comment: {}",
+                if action { "dislike" } else { "un-dislike" },
+                resp.message
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Delete a comment (删除评论)
+    /// Only own comments can be deleted
+    pub async fn delete_comment(&self, oid: i64, rpid: i64, comment_type: i32) -> Result<()> {
+        let url = self.build_url(BilibiliApiDomain::Main, "/x/v2/reply/del");
+
+        let form_data = vec![
+            ("type", comment_type.to_string()),
+            ("oid", oid.to_string()),
+            ("rpid", rpid.to_string()),
+        ];
+
+        let resp: ApiResponse<serde_json::Value> = self.post(&url, form_data).await?;
+
+        if resp.code != 0 {
+            return Err(anyhow::anyhow!(
+                "Failed to delete comment: {}",
+                resp.message
+            ));
+        }
+
+        Ok(())
     }
 }
 

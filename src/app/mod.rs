@@ -427,6 +427,73 @@ impl App {
                 self.current_page = Page::Login(LoginPage::new());
                 self.init_current_page().await;
             }
+            AppAction::LikeComment {
+                oid,
+                rpid,
+                comment_type,
+            } => {
+                let client = self.api_client.clone();
+                // Toggle like - if already liked, unlike
+                if let Page::VideoDetail(page) = &mut self.current_page {
+                    let is_liked = page.liked_comments.contains(&rpid);
+                    match client
+                        .like_comment(oid, rpid, comment_type, !is_liked)
+                        .await
+                    {
+                        Ok(()) => {
+                            if is_liked {
+                                page.liked_comments.remove(&rpid);
+                            } else {
+                                page.liked_comments.insert(rpid);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to like comment: {}", e);
+                        }
+                    }
+                } else if let Page::DynamicDetail(page) = &mut self.current_page {
+                    let is_liked = page.liked_comments.contains(&rpid);
+                    match client
+                        .like_comment(oid, rpid, comment_type, !is_liked)
+                        .await
+                    {
+                        Ok(()) => {
+                            if is_liked {
+                                page.liked_comments.remove(&rpid);
+                            } else {
+                                page.liked_comments.insert(rpid);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to like comment: {}", e);
+                        }
+                    }
+                }
+            }
+            AppAction::AddComment {
+                oid,
+                comment_type,
+                message,
+                root,
+            } => {
+                let client = self.api_client.clone();
+                match client
+                    .add_comment(oid, comment_type, &message, root, root)
+                    .await
+                {
+                    Ok(_response) => {
+                        // Reload comments to show new comment
+                        if let Page::VideoDetail(page) = &mut self.current_page {
+                            page.load_data(&client).await;
+                        } else if let Page::DynamicDetail(page) = &mut self.current_page {
+                            page.load_data(&client).await;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to add comment: {}", e);
+                    }
+                }
+            }
             AppAction::None => {}
         }
     }

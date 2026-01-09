@@ -7,6 +7,7 @@ use crate::api::comment::CommentItem;
 use crate::api::video::{RelatedVideoItem, VideoInfo};
 use crate::app::AppAction;
 use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
+use std::collections::HashSet;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum DetailFocus {
@@ -33,6 +34,10 @@ pub struct VideoDetailPage {
     pub expanded_comment: Option<i64>, // rpid of expanded comment
     pub comment_replies: Vec<CommentItem>, // replies for expanded comment
     pub loading_replies: bool,
+    // Comment action support
+    pub liked_comments: HashSet<i64>, // rpids of liked comments
+    pub input_mode: bool,             // comment input mode
+    pub input_buffer: String,         // comment input buffer
 }
 
 impl VideoDetailPage {
@@ -59,6 +64,9 @@ impl VideoDetailPage {
             expanded_comment: None,
             comment_replies: Vec::new(),
             loading_replies: false,
+            liked_comments: HashSet::new(),
+            input_mode: false,
+            input_buffer: String::new(),
         }
     }
 
@@ -475,14 +483,27 @@ impl VideoDetailPage {
 
 impl Component for VideoDetailPage {
     fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(6), // Video info
-                Constraint::Min(10),   // Comments + Related
-                Constraint::Length(2), // Help
-            ])
-            .split(area);
+        // Adjust layout based on input mode
+        let chunks = if self.input_mode {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(6), // Video info
+                    Constraint::Min(8),    // Comments + Related
+                    Constraint::Length(3), // Input box
+                    Constraint::Length(2), // Help
+                ])
+                .split(area)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(6), // Video info
+                    Constraint::Min(10),   // Comments + Related
+                    Constraint::Length(2), // Help
+                ])
+                .split(area)
+        };
 
         // Video info
         self.render_video_info(frame, chunks[0], theme);
@@ -521,15 +542,78 @@ impl Component for VideoDetailPage {
             self.render_related(frame, content_chunks[1], theme);
         }
 
+        // Input box (only in input mode)
+        if self.input_mode {
+            let input_block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.bilibili_pink))
+                .title(Span::styled(
+                    " ✏️ 发表评论 ",
+                    Style::default()
+                        .fg(theme.bilibili_pink)
+                        .add_modifier(Modifier::BOLD),
+                ));
+
+            let input_text = format!("{}_", self.input_buffer);
+            let input = Paragraph::new(input_text)
+                .style(Style::default().fg(theme.fg_primary))
+                .block(input_block);
+            frame.render_widget(input, chunks[2]);
+        }
+
         // Help
-        let help_text = "[j/k] 滚动  [Tab] 切换焦点  [r] 展开/收起回复  [Enter] 选择相关视频  [p] 播放  [q/Esc] 返回";
+        let help_chunk = if self.input_mode {
+            chunks[3]
+        } else {
+            chunks[2]
+        };
+        let help_text = if self.input_mode {
+            "[Enter] 发送评论  [Esc] 取消"
+        } else {
+            "[j/k] 滚动  [Tab] 切换  [Enter] 点赞/选择  [c] 评论  [r] 回复  [p] 播放  [q] 返回"
+        };
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(theme.fg_secondary))
             .alignment(Alignment::Center);
-        frame.render_widget(help, chunks[2]);
+        frame.render_widget(help, help_chunk);
     }
 
     fn handle_input(&mut self, key: KeyCode) -> Option<AppAction> {
+        // Handle input mode for adding comments
+        if self.input_mode {
+            match key {
+                KeyCode::Esc => {
+                    self.input_mode = false;
+                    self.input_buffer.clear();
+                    return Some(AppAction::None);
+                }
+                KeyCode::Enter => {
+                    if !self.input_buffer.is_empty() {
+                        let message = self.input_buffer.clone();
+                        self.input_buffer.clear();
+                        self.input_mode = false;
+                        return Some(AppAction::AddComment {
+                            oid: self.aid,
+                            comment_type: 1, // Video comment type
+                            message,
+                            root: None,
+                        });
+                    }
+                    return Some(AppAction::None);
+                }
+                KeyCode::Backspace => {
+                    self.input_buffer.pop();
+                    return Some(AppAction::None);
+                }
+                KeyCode::Char(c) => {
+                    self.input_buffer.push(c);
+                    return Some(AppAction::None);
+                }
+                _ => return Some(AppAction::None),
+            }
+        }
+
         match key {
             KeyCode::Char('q') | KeyCode::Esc => Some(AppAction::BackToList),
             KeyCode::Char('p') => {
@@ -544,6 +628,12 @@ impl Component for VideoDetailPage {
                     cid,
                     duration,
                 })
+            }
+            KeyCode::Char('c') => {
+                // Enter comment input mode
+                self.input_mode = true;
+                self.input_buffer.clear();
+                Some(AppAction::None)
             }
             KeyCode::Char('r') => {
                 if self.focus == DetailFocus::Comments {
@@ -609,15 +699,29 @@ impl Component for VideoDetailPage {
                 Some(AppAction::None)
             }
             KeyCode::Enter => {
-                if self.focus == DetailFocus::Related {
-                    if let Some(card) = self.related_card_grid.selected_card() {
-                        if let Some(ref bvid) = card.bvid {
-                            let aid = card.aid.unwrap_or(0);
-                            return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
+                match self.focus {
+                    DetailFocus::Comments => {
+                        // Like the currently selected comment
+                        if self.comment_scroll < self.comments.len() {
+                            let comment = &self.comments[self.comment_scroll];
+                            return Some(AppAction::LikeComment {
+                                oid: self.aid,
+                                rpid: comment.rpid,
+                                comment_type: 1,
+                            });
                         }
+                        Some(AppAction::None)
+                    }
+                    DetailFocus::Related => {
+                        if let Some(card) = self.related_card_grid.selected_card() {
+                            if let Some(ref bvid) = card.bvid {
+                                let aid = card.aid.unwrap_or(0);
+                                return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
+                            }
+                        }
+                        Some(AppAction::None)
                     }
                 }
-                Some(AppAction::None)
             }
             _ => Some(AppAction::None),
         }

@@ -105,3 +105,45 @@ impl CommentItem {
         self.rcount.unwrap_or(0)
     }
 }
+
+/// Comment type enum for different content types
+#[derive(Debug, Clone, Copy)]
+pub enum CommentType {
+    /// 视频 (Video)
+    Video = 1,
+    /// 话题 (Topic)
+    Topic = 6,
+    /// 活动 (Activity)
+    Activity = 10,
+    /// 相簿/图片动态 (Photo Album)
+    Album = 11,
+    /// 专栏 (Article)
+    Article = 12,
+    /// 音频 (Audio)
+    Audio = 14,
+    /// 动态（纯文字 & 分享）
+    Dynamic = 17,
+    /// 合辑 (Playlist)
+    Playlist = 19,
+    /// 课程 (Course)
+    Course = 33,
+}
+
+impl CommentType {
+    pub fn as_i32(&self) -> i32 {
+        *self as i32
+    }
+}
+
+/// Response for adding a comment
+#[derive(Debug, Deserialize)]
+pub struct AddCommentResponse {
+    pub success_action: Option<i32>,
+    pub success_toast: Option<String>,
+    pub need_captcha: Option<bool>,
+    pub rpid: Option<i64>,
+    pub rpid_str: Option<String>,
+    pub root: Option<i64>,
+    pub parent: Option<i64>,
+    pub reply: Option<CommentItem>,
+}
