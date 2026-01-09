@@ -37,10 +37,3 @@ opt-level = "z"
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-[workspace.metadata.dist.dependencies.homebrew]
-mpv = "*"
-yt-dlp = "*"
-
-[package.metadata.aur]
-depends = ["mpv", "yt-dlp"]

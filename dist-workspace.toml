@@ -19,3 +19,7 @@ install-updater = false
 tap = "maredevi/homebrew-tap"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
+
+[dist.dependencies.homebrew]
+mpv = "*"
+yt-dlp = "*"
