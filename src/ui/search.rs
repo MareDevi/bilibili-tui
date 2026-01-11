@@ -433,6 +433,7 @@ impl Component for SearchPage {
                     Some(AppAction::None)
                 }
                 KeyCode::Tab => Some(AppAction::NavNext),
+                KeyCode::BackTab => Some(AppAction::NavPrev),
                 _ => Some(AppAction::None),
             }
         } else if self.show_hot_list {
@@ -462,6 +463,7 @@ impl Component for SearchPage {
                     Some(AppAction::None)
                 }
                 KeyCode::Tab => Some(AppAction::NavNext),
+                KeyCode::BackTab => Some(AppAction::NavPrev),
                 KeyCode::Char('q') => Some(AppAction::Quit),
                 _ => Some(AppAction::None),
             }
@@ -504,6 +506,7 @@ impl Component for SearchPage {
                     Some(AppAction::None)
                 }
                 KeyCode::Tab => Some(AppAction::NavNext),
+                KeyCode::BackTab => Some(AppAction::NavPrev),
                 KeyCode::Char('q') => Some(AppAction::Quit),
                 _ => Some(AppAction::None),
             }
