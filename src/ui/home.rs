@@ -411,6 +411,7 @@ impl Component for HomePage {
                 Some(AppAction::SwitchToHome)
             }
             KeyCode::Tab => Some(AppAction::NavNext),
+            KeyCode::BackTab => Some(AppAction::NavPrev),
             KeyCode::Char('t') => Some(AppAction::NextTheme),
             KeyCode::Char('s') => Some(AppAction::SwitchToSettings),
             _ => Some(AppAction::None),
