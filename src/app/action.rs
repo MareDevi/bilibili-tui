@@ -8,6 +8,8 @@ pub enum AppAction {
     Quit,
     /// Switch to home page
     SwitchToHome,
+    /// Refresh home page recommendations (force reload)
+    RefreshHome,
     /// Switch to login page
     SwitchToLogin,
     /// Switch to settings page

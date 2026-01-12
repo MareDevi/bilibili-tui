@@ -408,7 +408,7 @@ impl Component for HomePage {
                 self.loading = true;
                 self.videos.clear();
                 self.pending_downloads.clear();
-                Some(AppAction::SwitchToHome)
+                Some(AppAction::RefreshHome)
             }
             KeyCode::Tab => Some(AppAction::NavNext),
             KeyCode::BackTab => Some(AppAction::NavPrev),

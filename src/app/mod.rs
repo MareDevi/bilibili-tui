@@ -39,6 +39,9 @@ pub struct App {
     pub theme_variant: ThemeVariant,
     pub config: AppConfig,
     pub keybindings: Keybindings,
+
+    /// Cached home page to avoid refresh when switching tabs
+    pub cached_home: Option<HomePage>,
 }
 
 impl App {
@@ -78,6 +81,7 @@ impl App {
             theme_variant,
             config,
             keybindings,
+            cached_home: None,
         }
     }
 
@@ -268,6 +272,18 @@ impl App {
             AppAction::Quit => self.should_quit = true,
             AppAction::SwitchToHome => {
                 self.sidebar.select(NavItem::Home);
+                // Use cached home page if available
+                if let Some(cached) = self.cached_home.take() {
+                    self.current_page = Page::Home(cached);
+                } else {
+                    self.current_page = Page::Home(HomePage::new());
+                    self.init_current_page().await;
+                }
+            }
+            AppAction::RefreshHome => {
+                self.sidebar.select(NavItem::Home);
+                // Clear cache and create fresh home page
+                self.cached_home = None;
                 self.current_page = Page::Home(HomePage::new());
                 self.init_current_page().await;
             }
@@ -358,6 +374,12 @@ impl App {
             }
             AppAction::OpenVideoDetail(bvid, aid) => {
                 self.save_previous_page();
+                // Cache home page before navigating to video detail
+                if let Page::Home(home_page) =
+                    std::mem::replace(&mut self.current_page, Page::Home(HomePage::new()))
+                {
+                    self.cached_home = Some(home_page);
+                }
                 let mut detail_page = VideoDetailPage::new(bvid, aid);
                 let client = &self.api_client;
                 detail_page.load_data(client).await;
@@ -365,6 +387,12 @@ impl App {
             }
             AppAction::OpenDynamicDetail(dynamic_id) => {
                 self.save_previous_page();
+                // Cache home page before navigating to dynamic detail
+                if let Page::Home(home_page) =
+                    std::mem::replace(&mut self.current_page, Page::Home(HomePage::new()))
+                {
+                    self.cached_home = Some(home_page);
+                }
                 use crate::ui::DynamicDetailPage;
                 let mut detail_page = DynamicDetailPage::new(dynamic_id);
                 let client = &self.api_client;
@@ -375,8 +403,13 @@ impl App {
                 match self.previous_page.take() {
                     Some(PreviousPage::Home) => {
                         self.sidebar.select(NavItem::Home);
-                        self.current_page = Page::Home(HomePage::new());
-                        self.init_current_page().await;
+                        // Use cached home page if available
+                        if let Some(cached) = self.cached_home.take() {
+                            self.current_page = Page::Home(cached);
+                        } else {
+                            self.current_page = Page::Home(HomePage::new());
+                            self.init_current_page().await;
+                        }
                     }
                     Some(PreviousPage::Search) => {
                         self.sidebar.select(NavItem::Search);
@@ -396,8 +429,12 @@ impl App {
                     None => {
                         // Default to home
                         self.sidebar.select(NavItem::Home);
-                        self.current_page = Page::Home(HomePage::new());
-                        self.init_current_page().await;
+                        if let Some(cached) = self.cached_home.take() {
+                            self.current_page = Page::Home(cached);
+                        } else {
+                            self.current_page = Page::Home(HomePage::new());
+                            self.init_current_page().await;
+                        }
                     }
                 }
             }
@@ -578,11 +615,25 @@ impl App {
     }
 
     async fn switch_to_nav_page(&mut self) {
+        // First, cache home page if we're leaving it
+        if matches!(self.current_page, Page::Home(_)) && self.sidebar.selected != NavItem::Home {
+            if let Page::Home(home_page) =
+                std::mem::replace(&mut self.current_page, Page::Home(HomePage::new()))
+            {
+                self.cached_home = Some(home_page);
+            }
+        }
+
         match self.sidebar.selected {
             NavItem::Home => {
                 if !matches!(self.current_page, Page::Home(_)) {
-                    self.current_page = Page::Home(HomePage::new());
-                    self.init_current_page().await;
+                    // Use cached home page if available
+                    if let Some(cached) = self.cached_home.take() {
+                        self.current_page = Page::Home(cached);
+                    } else {
+                        self.current_page = Page::Home(HomePage::new());
+                        self.init_current_page().await;
+                    }
                 }
             }
             NavItem::Search => {
