@@ -188,9 +188,9 @@ impl App {
             Page::Login(_) | Page::VideoDetail(_) | Page::DynamicDetail(_)
         ) {
             match &mut self.current_page {
-                Page::Login(page) => page.draw(frame, area, &self.theme),
-                Page::VideoDetail(page) => page.draw(frame, area, &self.theme),
-                Page::DynamicDetail(page) => page.draw(frame, area, &self.theme),
+                Page::Login(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+                Page::VideoDetail(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+                Page::DynamicDetail(page) => page.draw(frame, area, &self.theme, &self.keybindings),
                 _ => {}
             }
             return;
@@ -222,14 +222,14 @@ impl App {
 
     fn draw_page(&mut self, frame: &mut Frame, area: Rect) {
         match &mut self.current_page {
-            Page::Login(page) => page.draw(frame, area, &self.theme),
-            Page::Home(page) => page.draw(frame, area, &self.theme),
-            Page::Search(page) => page.draw(frame, area, &self.theme),
-            Page::Dynamic(page) => page.draw(frame, area, &self.theme),
-            Page::DynamicDetail(page) => page.draw(frame, area, &self.theme),
-            Page::VideoDetail(page) => page.draw(frame, area, &self.theme),
-            Page::History(page) => page.draw(frame, area, &self.theme),
-            Page::Settings(page) => page.draw(frame, area, &self.theme),
+            Page::Login(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::Home(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::Search(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::Dynamic(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::DynamicDetail(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::VideoDetail(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::History(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::Settings(page) => page.draw(frame, area, &self.theme, &self.keybindings),
         }
     }
 

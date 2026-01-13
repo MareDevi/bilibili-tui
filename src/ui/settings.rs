@@ -101,7 +101,7 @@ impl Default for SettingsPage {
 }
 
 impl Component for SettingsPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
         // Main layout: header + content
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -157,7 +157,7 @@ impl Component for SettingsPage {
         let help_line = Line::from(vec![
             Span::styled(" [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "[]",
+                format!("{}{}", keys.section_prev, keys.section_next),
                 Style::default()
                     .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
@@ -166,7 +166,7 @@ impl Component for SettingsPage {
             Span::styled("切换分类", Style::default().fg(theme.fg_secondary)),
             Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "↑↓",
+                format!("{}{}", keys.nav_up, keys.nav_down),
                 Style::default()
                     .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
@@ -175,7 +175,7 @@ impl Component for SettingsPage {
             Span::styled("选择", Style::default().fg(theme.fg_secondary)),
             Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "Enter",
+                &keys.confirm,
                 Style::default()
                     .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
@@ -184,7 +184,7 @@ impl Component for SettingsPage {
             Span::styled("确认", Style::default().fg(theme.fg_secondary)),
             Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "Tab",
+                &keys.nav_next_page,
                 Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
             ),
             Span::styled("] ", Style::default().fg(theme.fg_secondary)),

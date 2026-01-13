@@ -6,6 +6,7 @@ use crate::api::client::ApiClient;
 use crate::api::comment::CommentItem;
 use crate::api::video::{RelatedVideoItem, VideoInfo};
 use crate::app::AppAction;
+use crate::storage::Keybindings;
 use ratatui::{
     crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind},
     prelude::*,
@@ -489,7 +490,7 @@ impl VideoDetailPage {
 }
 
 impl Component for VideoDetailPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
         // Adjust layout based on input mode
         let chunks = if self.input_mode {
             Layout::default()
@@ -576,9 +577,18 @@ impl Component for VideoDetailPage {
             chunks[2]
         };
         let help_text = if self.input_mode {
-            "[Enter] 发送评论  [Esc] 取消"
+            format!("[{}] 发送评论  [{}] 取消", keys.confirm, keys.back)
         } else {
-            "[j/k] 滚动  [Tab] 切换  [Enter] 点赞/选择  [c] 评论  [r] 回复  [p] 播放  [q] 返回"
+            format!("[{}/{}] 滚动  [{}] 切换  [{}] 点赞/选择  [{}] 评论  [{}] 回复  [{}] 播放  [{}] 返回",
+                keys.nav_up,
+                keys.nav_down,
+                keys.nav_next_page,
+                keys.confirm,
+                keys.comment,
+                keys.toggle_replies,
+                keys.play,
+                keys.back
+            )
         };
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(theme.fg_secondary))

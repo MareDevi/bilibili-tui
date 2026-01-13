@@ -5,6 +5,7 @@ use crate::api::client::ApiClient;
 use crate::api::comment::CommentItem;
 use crate::api::dynamic::DynamicItem;
 use crate::app::AppAction;
+use crate::storage::Keybindings;
 use image::DynamicImage;
 use ratatui::{
     crossterm::event::{KeyCode, MouseEvent, MouseEventKind},
@@ -305,7 +306,7 @@ impl DynamicDetailPage {
 }
 
 impl Component for DynamicDetailPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
         // Poll for completed image downloads
         self.poll_image_results();
 
@@ -418,11 +419,23 @@ impl Component for DynamicDetailPage {
             chunks[2]
         };
         let help_text = if self.input_mode {
-            "[Enter] 发送评论  [Esc] 取消"
+            format!("[{}] 发送评论  [{}] 取消", keys.confirm, keys.back)
         } else if !self.image_urls.is_empty() {
-            "[h/l] 图片  [j/k] 滚动  [Enter] 点赞  [c] 评论  [n] 加载更多  [q] 返回"
+            format!(
+                "[{}/{}] 图片  [{}/{}] 滚动  [{}] 点赞  [{}] 评论  [n] 加载更多  [{}] 返回",
+                keys.nav_left,
+                keys.nav_right,
+                keys.nav_up,
+                keys.nav_down,
+                keys.confirm,
+                keys.comment,
+                keys.back
+            )
         } else {
-            "[j/k] 滚动  [Enter] 点赞  [c] 评论  [n] 加载更多  [q] 返回"
+            format!(
+                "[{}/{}] 滚动  [{}] 点赞  [{}] 评论  [n] 加载更多  [{}] 返回",
+                keys.nav_up, keys.nav_down, keys.confirm, keys.comment, keys.back
+            )
         };
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(theme.fg_secondary))

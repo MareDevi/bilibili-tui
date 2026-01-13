@@ -4,6 +4,7 @@ use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::recommend::VideoItem;
 use crate::app::AppAction;
+use crate::storage::Keybindings;
 use image::DynamicImage;
 use ratatui::{
     crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind},
@@ -223,7 +224,7 @@ impl Default for HomePage {
 }
 
 impl Component for HomePage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -292,17 +293,24 @@ impl Component for HomePage {
         }
 
         // Help with styled shortcuts
+        let arrow_keys = keys.get_arrow_keys_display();
+        let nav_keys = keys.get_nav_keys_display();
+        let confirm = keys.confirm.clone();
+        let refresh = keys.refresh.clone();
+        let quit = keys.quit.clone();
+        let next_theme = keys.next_theme.clone();
+
         let help_line = Line::from(vec![
             Span::styled(" [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "←↑↓→",
+                &arrow_keys,
                 Style::default()
                     .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled("/", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "hjkl",
+                &nav_keys,
                 Style::default()
                     .fg(theme.fg_accent)
                     .add_modifier(Modifier::BOLD),
@@ -311,7 +319,7 @@ impl Component for HomePage {
             Span::styled("导航", Style::default().fg(theme.fg_secondary)),
             Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "Enter",
+                &confirm,
                 Style::default()
                     .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
@@ -320,7 +328,7 @@ impl Component for HomePage {
             Span::styled("播放", Style::default().fg(theme.fg_secondary)),
             Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "r",
+                &refresh,
                 Style::default()
                     .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
@@ -329,7 +337,7 @@ impl Component for HomePage {
             Span::styled("刷新", Style::default().fg(theme.fg_secondary)),
             Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "q",
+                &quit,
                 Style::default()
                     .fg(theme.error)
                     .add_modifier(Modifier::BOLD),
@@ -338,7 +346,7 @@ impl Component for HomePage {
             Span::styled("退出", Style::default().fg(theme.fg_secondary)),
             Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "t",
+                &next_theme,
                 Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
             ),
             Span::styled("] ", Style::default().fg(theme.fg_secondary)),

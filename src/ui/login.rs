@@ -4,7 +4,7 @@ use super::{Component, Theme};
 use crate::api::auth::{QrcodeData, QrcodePollStatus};
 use crate::api::client::ApiClient;
 use crate::app::AppAction;
-use crate::storage::Credentials;
+use crate::storage::{Credentials, Keybindings};
 use qrcode::QrCode;
 use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
 use std::time::{Duration, Instant};
@@ -109,7 +109,7 @@ impl Default for LoginPage {
 }
 
 impl Component for LoginPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
         // Layout: title, QR code, status, help
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -243,7 +243,7 @@ impl Component for LoginPage {
         let help_line = Line::from(vec![
             Span::styled(" [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "r",
+                &keys.refresh,
                 Style::default()
                     .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
@@ -252,7 +252,7 @@ impl Component for LoginPage {
             Span::styled("刷新二维码", Style::default().fg(theme.fg_secondary)),
             Span::styled("  [", Style::default().fg(theme.fg_secondary)),
             Span::styled(
-                "q",
+                &keys.quit,
                 Style::default()
                     .fg(theme.error)
                     .add_modifier(Modifier::BOLD),

@@ -294,6 +294,17 @@ impl Keybindings {
         self.matches(&self.up_next, key)
     }
 
+    pub fn get_nav_keys_display(&self) -> String {
+        format!(
+            "{}{}{}{}",
+            self.nav_left, self.nav_up, self.nav_down, self.nav_right
+        )
+    }
+
+    pub fn get_arrow_keys_display(&self) -> String {
+        "←↑↓→".to_string()
+    }
+
     /// Get all keybinding labels for display in settings
     pub fn get_all_labels(&self) -> Vec<(&'static str, &str)> {
         vec![

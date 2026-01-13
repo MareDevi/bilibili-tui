@@ -5,6 +5,7 @@ use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::dynamic::DynamicItem;
 use crate::app::AppAction;
+use crate::storage::Keybindings;
 use ratatui::{
     crossterm::event::{KeyCode, MouseButton, MouseEvent},
     prelude::*,
@@ -363,7 +364,7 @@ impl Default for DynamicPage {
 }
 
 impl Component for DynamicPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -562,9 +563,17 @@ impl Component for DynamicPage {
         }
 
         // Help
-        let help = Paragraph::new(
-            "↑↓←→:卡片导航 | h/l:切UP主 | []:切标签 | Tab:切页面 | Enter:详情 | r:刷新",
-        )
+        let help = Paragraph::new(format!(
+            "{}:卡片导航 | {}/{}:切UP主 | {}/{}:切标签 | {}:切页面 | {}:详情 | {}:刷新",
+            keys.get_nav_keys_display(),
+            keys.get_arrow_keys_display(),
+            keys.get_arrow_keys_display(),
+            keys.section_prev,
+            keys.section_next,
+            keys.nav_next_page,
+            keys.confirm,
+            keys.refresh
+        ))
         .style(Style::default().fg(theme.fg_secondary))
         .alignment(Alignment::Center);
         frame.render_widget(help, chunks[3]);

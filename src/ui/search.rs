@@ -5,6 +5,7 @@ use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::search::{HotwordItem, SearchVideoItem};
 use crate::app::AppAction;
+use crate::storage::Keybindings;
 use ratatui::{
     crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind},
     prelude::*,
@@ -252,7 +253,7 @@ impl Default for SearchPage {
 }
 
 impl Component for SearchPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -369,9 +370,19 @@ impl Component for SearchPage {
 
         // Help
         let help_text = if self.input_mode {
-            "[Enter] 搜索  [Esc] 取消  [Tab] 导航"
+            format!(
+                "[{}] 搜索  [{}] 取消  [{}] 导航",
+                keys.confirm, keys.back, keys.nav_next_page
+            )
         } else {
-            "[←↑↓→/hjkl] 导航  [Enter] 详情  [/] 搜索  [Tab] 切换"
+            format!(
+                "[{}/{}] 导航  [{}] 详情  [{}] 搜索  [{}] 切换",
+                keys.get_arrow_keys_display(),
+                keys.get_nav_keys_display(),
+                keys.confirm,
+                keys.search_focus,
+                keys.nav_next_page
+            )
         };
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(theme.fg_secondary))

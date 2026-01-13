@@ -32,7 +32,7 @@ use ratatui::{
 
 /// UI Component trait
 pub trait Component {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme);
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings);
     fn handle_input(&mut self, key: KeyCode, keys: &Keybindings) -> Option<AppAction> {
         let _ = (key, keys);
         None

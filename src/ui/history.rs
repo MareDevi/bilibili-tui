@@ -4,6 +4,7 @@ use super::{Component, Theme};
 use crate::api::client::ApiClient;
 use crate::api::history::{HistoryCursor, HistoryItem};
 use crate::app::AppAction;
+use crate::storage::Keybindings;
 use image::DynamicImage;
 use ratatui::{
     crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind},
@@ -228,7 +229,7 @@ impl Default for HistoryPage {
 }
 
 impl Component for HistoryPage {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, _keys: &Keybindings) {
         // Main block
         let block = Block::default()
             .borders(Borders::ALL)
