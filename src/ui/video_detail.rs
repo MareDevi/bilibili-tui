@@ -18,6 +18,7 @@ use std::time::Instant;
 #[derive(Clone, Copy, PartialEq)]
 pub enum DetailFocus {
     Comments,
+    Episodes,
     Related,
 }
 
@@ -44,6 +45,10 @@ pub struct VideoDetailPage {
     pub input_buffer: String,
     last_click_time: Option<Instant>,
     last_click_index: Option<usize>,
+    /// Current episode index for multi-part videos (0-based)
+    pub current_page_index: usize,
+    /// Scroll position in episode list
+    pub episode_scroll: usize,
 }
 
 impl VideoDetailPage {
@@ -75,6 +80,8 @@ impl VideoDetailPage {
             input_buffer: String::new(),
             last_click_time: None,
             last_click_index: None,
+            current_page_index: 0,
+            episode_scroll: 0,
         }
     }
 
@@ -487,6 +494,106 @@ impl VideoDetailPage {
         // Render the video card grid
         self.related_card_grid.render(frame, inner, theme);
     }
+
+    /// Check if video has multiple parts
+    fn has_multiple_pages(&self) -> bool {
+        self.video_info
+            .as_ref()
+            .and_then(|info| info.pages.as_ref())
+            .map(|pages| pages.len() > 1)
+            .unwrap_or(false)
+    }
+
+    /// Get the video pages
+    fn get_pages(&self) -> Option<&Vec<crate::api::video::VideoPage>> {
+        self.video_info
+            .as_ref()
+            .and_then(|info| info.pages.as_ref())
+    }
+
+    fn render_episodes(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let is_focused = self.focus == DetailFocus::Episodes;
+        let border_style = if is_focused {
+            Style::default().fg(theme.border_focused)
+        } else {
+            Style::default().fg(theme.border_unfocused)
+        };
+
+        let pages = match self.get_pages() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(border_style)
+            .title(Span::styled(
+                format!(" 📑 选集 ({}) ", pages.len()),
+                Style::default().fg(if is_focused {
+                    theme.bilibili_pink
+                } else {
+                    theme.fg_muted
+                }),
+            ));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let visible_count = inner.height as usize;
+        let scroll_offset = if self.episode_scroll >= visible_count {
+            self.episode_scroll - visible_count + 1
+        } else {
+            0
+        };
+
+        let items: Vec<ListItem> = pages
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(visible_count)
+            .map(|(idx, page)| {
+                let is_current = idx == self.current_page_index;
+                let is_selected = idx == self.episode_scroll;
+
+                // Format duration as mm:ss
+                let duration = {
+                    let mins = page.duration / 60;
+                    let secs = page.duration % 60;
+                    format!("{:02}:{:02}", mins, secs)
+                };
+
+                let prefix = if is_current { "▶ " } else { "  " };
+                let title = truncate_str(&page.part, 30);
+
+                let style = if is_selected && is_focused {
+                    Style::default()
+                        .fg(theme.bilibili_pink)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_current {
+                    Style::default().fg(theme.fg_accent)
+                } else {
+                    Style::default().fg(theme.fg_primary)
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(prefix, style),
+                    Span::styled(
+                        format!("P{} ", page.page),
+                        Style::default().fg(theme.fg_secondary),
+                    ),
+                    Span::styled(title, style),
+                    Span::styled(
+                        format!("  {}", duration),
+                        Style::default().fg(theme.fg_muted),
+                    ),
+                ]))
+            })
+            .collect();
+
+        let list = List::new(items);
+        frame.render_widget(list, inner);
+    }
 }
 
 impl Component for VideoDetailPage {
@@ -542,12 +649,27 @@ impl Component for VideoDetailPage {
                 .direction(Direction::Horizontal)
                 .constraints([
                     Constraint::Percentage(60), // Comments
-                    Constraint::Percentage(40), // Related
+                    Constraint::Percentage(40), // Related + Episodes
                 ])
                 .split(chunks[1]);
 
             self.render_comments(frame, content_chunks[0], theme);
-            self.render_related(frame, content_chunks[1], theme);
+
+            // Right panel: Episodes (if multi-part) + Related videos
+            if self.has_multiple_pages() {
+                let right_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage(50), // Episodes
+                        Constraint::Percentage(50), // Related
+                    ])
+                    .split(content_chunks[1]);
+
+                self.render_episodes(frame, right_chunks[0], theme);
+                self.render_related(frame, right_chunks[1], theme);
+            } else {
+                self.render_related(frame, content_chunks[1], theme);
+            }
         }
 
         // Input box (only in input mode)
@@ -639,6 +761,27 @@ impl Component for VideoDetailPage {
             return Some(AppAction::BackToList);
         }
         if keys.matches_play(key) {
+            // For multi-part videos, use PlayVideoWithPages for auto-play next
+            if let Some(pages) = self.get_pages() {
+                if pages.len() > 1 {
+                    return Some(AppAction::PlayVideoWithPages {
+                        bvid: self.bvid.clone(),
+                        aid: self.aid,
+                        pages: pages.clone(),
+                        current_index: self.current_page_index,
+                    });
+                }
+                // Single page video - use original PlayVideo
+                if let Some(page) = pages.first() {
+                    return Some(AppAction::PlayVideo {
+                        bvid: self.bvid.clone(),
+                        aid: self.aid,
+                        cid: page.cid,
+                        duration: page.duration,
+                    });
+                }
+            }
+            // Fallback to video info
             let (cid, duration) = if let Some(info) = &self.video_info {
                 (info.cid, info.duration.unwrap_or(0))
             } else {
@@ -663,11 +806,20 @@ impl Component for VideoDetailPage {
             }
             return Some(AppAction::None);
         }
-        // Tab switches focus between Comments and Related (page-specific, not nav)
+        // Tab switches focus between Comments, Episodes, and Related (page-specific, not nav)
         if key == KeyCode::Tab {
-            self.focus = match self.focus {
-                DetailFocus::Comments => DetailFocus::Related,
-                DetailFocus::Related => DetailFocus::Comments,
+            self.focus = if self.has_multiple_pages() {
+                match self.focus {
+                    DetailFocus::Comments => DetailFocus::Episodes,
+                    DetailFocus::Episodes => DetailFocus::Related,
+                    DetailFocus::Related => DetailFocus::Comments,
+                }
+            } else {
+                match self.focus {
+                    DetailFocus::Comments => DetailFocus::Related,
+                    DetailFocus::Episodes => DetailFocus::Related,
+                    DetailFocus::Related => DetailFocus::Comments,
+                }
             };
             return Some(AppAction::None);
         }
@@ -685,6 +837,13 @@ impl Component for VideoDetailPage {
                         return Some(AppAction::LoadMoreComments);
                     }
                 }
+                DetailFocus::Episodes => {
+                    if let Some(pages) = self.get_pages() {
+                        if self.episode_scroll + 1 < pages.len() {
+                            self.episode_scroll += 1;
+                        }
+                    }
+                }
                 DetailFocus::Related => {
                     if self.related_card_grid.move_down() {
                         self.related_scroll = self.related_card_grid.selected_index;
@@ -698,6 +857,11 @@ impl Component for VideoDetailPage {
                 DetailFocus::Comments => {
                     if self.comment_scroll > 0 {
                         self.comment_scroll -= 1;
+                    }
+                }
+                DetailFocus::Episodes => {
+                    if self.episode_scroll > 0 {
+                        self.episode_scroll -= 1;
                     }
                 }
                 DetailFocus::Related => {
@@ -731,6 +895,20 @@ impl Component for VideoDetailPage {
                             rpid: comment.rpid,
                             comment_type: 1,
                         });
+                    }
+                }
+                DetailFocus::Episodes => {
+                    // Select and play the episode with auto-advance
+                    if let Some(pages) = self.get_pages().cloned() {
+                        if self.episode_scroll < pages.len() {
+                            self.current_page_index = self.episode_scroll;
+                            return Some(AppAction::PlayVideoWithPages {
+                                bvid: self.bvid.clone(),
+                                aid: self.aid,
+                                pages,
+                                current_index: self.episode_scroll,
+                            });
+                        }
                     }
                 }
                 DetailFocus::Related => {
@@ -771,6 +949,13 @@ impl Component for VideoDetailPage {
                             self.related_scroll = self.related_card_grid.selected_index;
                         }
                     }
+                    DetailFocus::Episodes => {
+                        if let Some(pages) = self.get_pages() {
+                            if self.episode_scroll + 1 < pages.len() {
+                                self.episode_scroll += 1;
+                            }
+                        }
+                    }
                 }
                 None
             }
@@ -784,6 +969,11 @@ impl Component for VideoDetailPage {
                     DetailFocus::Related => {
                         if self.related_card_grid.move_up() {
                             self.related_scroll = self.related_card_grid.selected_index;
+                        }
+                    }
+                    DetailFocus::Episodes => {
+                        if self.episode_scroll > 0 {
+                            self.episode_scroll -= 1;
                         }
                     }
                 }

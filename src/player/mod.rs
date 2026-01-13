@@ -14,9 +14,13 @@ pub async fn play_video(
     aid: i64,
     cid: i64,
     duration: i64,
+    page_num: Option<i32>,
     credentials: Option<&Credentials>,
 ) -> Result<()> {
-    let video_url = format!("https://www.bilibili.com/video/{}", bvid);
+    let video_url = match page_num {
+        Some(p) if p > 1 => format!("https://www.bilibili.com/video/{}?p={}", bvid, p),
+        _ => format!("https://www.bilibili.com/video/{}", bvid),
+    };
 
     // Report watch start
     let _ = crate::api::heartbeat::report_watch_start(&api_client, aid, cid, bvid, duration).await;

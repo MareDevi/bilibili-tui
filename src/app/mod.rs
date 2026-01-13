@@ -320,11 +320,43 @@ impl App {
                     aid,
                     cid,
                     duration,
+                    None,
                     self.credentials.as_ref(),
                 )
                 .await
                 {
                     eprintln!("Failed to play video: {}", e);
+                }
+            }
+            AppAction::PlayVideoWithPages {
+                bvid,
+                aid,
+                pages,
+                current_index,
+            } => {
+                // Play only the selected episode
+                if current_index < pages.len() {
+                    let page = &pages[current_index];
+                    let api_client = self.api_client.clone();
+                    if let Err(e) = crate::player::play_video(
+                        api_client,
+                        &bvid,
+                        aid,
+                        page.cid,
+                        page.duration,
+                        Some(page.page),
+                        self.credentials.as_ref(),
+                    )
+                    .await
+                    {
+                        eprintln!("Failed to play video: {}", e);
+                    }
+                    // Update current page index in video detail page
+                    if let Page::VideoDetail(detail_page) = &mut self.current_page {
+                        if detail_page.bvid == bvid {
+                            detail_page.current_page_index = current_index;
+                        }
+                    }
                 }
             }
             AppAction::NavNext => {

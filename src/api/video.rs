@@ -35,7 +35,7 @@ pub struct VideoStat {
     pub reply: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct VideoPage {
     pub cid: i64,
     pub page: i32,

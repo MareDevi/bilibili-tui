@@ -25,6 +25,13 @@ pub enum AppAction {
         cid: i64,
         duration: i64,
     },
+    /// Play a video with page info for auto-play next episode
+    PlayVideoWithPages {
+        bvid: String,
+        aid: i64,
+        pages: Vec<crate::api::video::VideoPage>,
+        current_index: usize,
+    },
     /// Navigate to next sidebar item
     NavNext,
     /// Navigate to previous sidebar item
