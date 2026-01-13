@@ -1,3 +1,13 @@
+## [1.0.8] - 2026-01-13
+
+### 🚀 Features
+
+- *(ui)* Display dynamic keybindings in help text
+- Add support for multi-part video episodes and selection
+
+### ⚙️ Miscellaneous Tasks
+
+- Bump version to 1.0.8
 ## [1.0.7] - 2026-01-12
 
 ### 🚀 Features
@@ -6,6 +16,14 @@
 - *(app)* Add home page caching and refresh action
 - Add custom keybindings support and persistence
 - *(ui)* Improve QR code scannability and centering
+
+### 📚 Documentation
+
+- Update CHANGELOG.md for version 1.0.7
+
+### ⚙️ Miscellaneous Tasks
+
+- Bump version to 1.0.7
 ## [1.0.6] - 2026-01-09
 
 ### 🚜 Refactor
