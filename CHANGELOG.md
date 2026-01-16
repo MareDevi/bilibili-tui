@@ -1,3 +1,14 @@
+## [1.0.9] - 2026-01-16
+
+### 🚀 Features
+
+- Add live streaming functionality with recommendations and detail pages
+- *(ui)* Enhance QR code display with image support in login page
+
+### ⚙️ Miscellaneous Tasks
+
+- Update CHANGELOG.md for version 1.0.8
+- Bump version to 1.0.9
 ## [1.0.8] - 2026-01-13
 
 ### 🚀 Features
