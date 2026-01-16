@@ -10,6 +10,7 @@ pub enum NavItem {
     Search,
     Dynamic,
     History,
+    Live,
     Settings,
 }
 
@@ -20,6 +21,7 @@ impl NavItem {
             NavItem::Search => "🔍 搜索",
             NavItem::Dynamic => "📺 动态",
             NavItem::History => "📜 历史",
+            NavItem::Live => "📡 直播",
             NavItem::Settings => "⚙️ 设置",
         }
     }
@@ -30,6 +32,7 @@ impl NavItem {
             NavItem::Search,
             NavItem::Dynamic,
             NavItem::History,
+            NavItem::Live,
             NavItem::Settings,
         ]
     }

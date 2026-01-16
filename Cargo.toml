@@ -10,11 +10,14 @@ homepage = "https://github.com/MareDevi/bilibili-tui"
 
 [dependencies]
 anyhow = "1.0.100"
+brotli = "8.0.2"
 catppuccin = { version = "2.6.0", features = ["ratatui"] }
 chrono = "0.4.42"
 color-eyre = "0.6.5"
 crossterm = "0.29.0"
 dirs = "6.0.0"
+flate2 = "1.1.8"
+futures-util = "0.3.31"
 image = "0.25.9"
 md5 = "0.8.0"
 qrcode = { version = "0.14.1", default-features = false }
@@ -24,6 +27,7 @@ reqwest = { version = "0.13.1", features = ["json", "cookies", "form"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["full"] }
+tokio-tungstenite = { version = "0.28.0", features = ["native-tls"] }
 tui-big-text = "0.8.1"
 tui-qrcode = { version = "0.2.2", default-features = false }
 

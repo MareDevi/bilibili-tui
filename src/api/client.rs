@@ -687,8 +687,150 @@ impl ApiClient {
 
         Ok(())
     }
-}
 
+    // ========== Live Streaming APIs ==========
+
+    /// Get live streaming recommendations
+    pub async fn get_live_recommendations(&self) -> Result<Vec<super::live::LiveRoom>> {
+        const LIVE_REC_URL: &str =
+            "https://api.live.bilibili.com/xlive/web-interface/v1/webMain/getMoreRecList";
+
+        let url = format!("{}?platform=web", LIVE_REC_URL);
+
+        let mut req = self.client.get(&url);
+        if let Some(ref cookies) = *self.cookies.read().expect("cookies lock poisoned") {
+            req = req.header(COOKIE, cookies.as_str());
+        }
+
+        let resp = req.send().await?;
+        let api_resp: ApiResponse<super::live::LiveRecommendData> = resp.json().await?;
+
+        Ok(api_resp
+            .data
+            .map(|d| d.recommend_room_list)
+            .unwrap_or_default())
+    }
+
+    /// Get live room info
+    pub async fn get_live_room_info(&self, room_id: i64) -> Result<super::live::LiveRoomInfo> {
+        let url = format!(
+            "https://api.live.bilibili.com/room/v1/Room/get_info?room_id={}",
+            room_id
+        );
+
+        let mut req = self.client.get(&url);
+        if let Some(ref cookies) = *self.cookies.read().expect("cookies lock poisoned") {
+            req = req.header(COOKIE, cookies.as_str());
+        }
+
+        let resp = req.send().await?;
+        let api_resp: ApiResponse<super::live::LiveRoomInfo> = resp.json().await?;
+
+        api_resp
+            .data
+            .ok_or_else(|| anyhow::anyhow!("No data in live room info response"))
+    }
+
+    /// Get danmu info for WebSocket connection
+    pub async fn get_danmu_info(&self, room_id: i64) -> Result<super::live_ws::DanmuInfoData> {
+        let base_url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
+
+        // WBI signature is REQUIRED since 2025-05-26
+        self.ensure_wbi_keys().await?;
+
+        // Helper to build signed URL with the current WBI keys
+        let build_signed_url = |keys: &WbiKeys| {
+            let query_string = wbi::encode_wbi(
+                vec![
+                    ("id", room_id.to_string()),
+                    ("type", "0".to_string()),
+                    ("web_location", "444.8".to_string()),
+                ],
+                &keys.img_key,
+                &keys.sub_key,
+            );
+            format!("{}?{}", base_url, query_string)
+        };
+
+        // Try once, then refresh WBI keys and retry on signature error (-352)
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+
+            let keys = {
+                let guard = self.wbi_keys.read().expect("wbi lock");
+                guard
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("WBI keys unavailable"))?
+            };
+
+            let url = build_signed_url(&keys);
+
+            let mut req = self.client.get(&url);
+            if let Some(ref cookies) = *self.cookies.read().expect("cookies lock") {
+                req = req.header(COOKIE, cookies.as_str());
+            }
+
+            let resp = req.send().await?;
+            let resp_text = resp.text().await?;
+
+            let api_resp: ApiResponse<super::live_ws::DanmuInfoData> =
+                serde_json::from_str(&resp_text).map_err(|e| {
+                    anyhow::anyhow!(
+                        "解析失败: {} (响应: {})",
+                        e,
+                        &resp_text[..resp_text.len().min(200)]
+                    )
+                })?;
+
+            if api_resp.code == 0 {
+                return api_resp.data.ok_or_else(|| anyhow::anyhow!("响应无数据"));
+            }
+
+            // If signature failed, refresh keys and retry once
+            if api_resp.code == -352 && attempt == 1 {
+                *self.wbi_keys.write().expect("wbi lock") = None;
+                self.ensure_wbi_keys().await?;
+                continue;
+            }
+
+            return Err(anyhow::anyhow!(
+                "API错误 {}: {}",
+                api_resp.code,
+                api_resp.message
+            ));
+        }
+    }
+
+    /// Get live room history danmaku
+    pub async fn get_history_danmaku(
+        &self,
+        room_id: i64,
+    ) -> Result<super::live_ws::HistoryDanmakuData> {
+        let url = format!(
+            "https://api.live.bilibili.com/xlive/web-room/v1/dM/gethistory?roomid={}",
+            room_id
+        );
+
+        let mut req = self.client.get(&url);
+        if let Some(ref cookies) = *self.cookies.read().expect("cookies lock") {
+            req = req.header(COOKIE, cookies.as_str());
+        }
+
+        let resp = req.send().await?;
+        let api_resp: ApiResponse<super::live_ws::HistoryDanmakuData> = resp.json().await?;
+
+        if api_resp.code != 0 {
+            return Err(anyhow::anyhow!(
+                "API错误 {}: {}",
+                api_resp.code,
+                api_resp.message
+            ));
+        }
+
+        api_resp.data.ok_or_else(|| anyhow::anyhow!("响应无数据"))
+    }
+}
 impl Default for ApiClient {
     fn default() -> Self {
         Self::new()

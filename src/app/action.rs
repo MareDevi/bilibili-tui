@@ -83,6 +83,16 @@ pub enum AppAction {
         message: String,
         root: Option<i64>,
     },
+    /// Switch to live page
+    SwitchToLive,
+    /// Open live room detail
+    OpenLiveDetail(i64),
+    /// Refresh live recommendations
+    RefreshLive,
+    /// Load more live rooms
+    LoadMoreLive,
+    /// Play live stream
+    PlayLive { room_id: i64, title: String },
     /// No action
     None,
 }

@@ -5,8 +5,8 @@ pub use action::AppAction;
 use crate::api::client::ApiClient;
 use crate::storage::{AppConfig, Credentials, Keybindings};
 use crate::ui::{
-    Component, DynamicPage, HistoryPage, HomePage, LoginPage, NavItem, Page, SearchPage,
-    SettingsPage, Sidebar, Theme, ThemeVariant, VideoDetailPage,
+    Component, DynamicPage, HistoryPage, HomePage, LiveDetailPage, LivePage, LoginPage, NavItem,
+    Page, SearchPage, SettingsPage, Sidebar, Theme, ThemeVariant, VideoDetailPage,
 };
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent},
@@ -23,6 +23,7 @@ pub enum PreviousPage {
     Search,
     Dynamic,
     History,
+    Live,
 }
 
 /// Main application state
@@ -92,6 +93,7 @@ impl App {
             Page::Search(_) => Some(PreviousPage::Search),
             Page::Dynamic(_) => Some(PreviousPage::Dynamic),
             Page::History(_) => Some(PreviousPage::History),
+            Page::Live(_) => Some(PreviousPage::Live),
             _ => None,
         };
     }
@@ -229,6 +231,8 @@ impl App {
             Page::DynamicDetail(page) => page.draw(frame, area, &self.theme, &self.keybindings),
             Page::VideoDetail(page) => page.draw(frame, area, &self.theme, &self.keybindings),
             Page::History(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::Live(page) => page.draw(frame, area, &self.theme, &self.keybindings),
+            Page::LiveDetail(page) => page.draw(frame, area, &self.theme, &self.keybindings),
             Page::Settings(page) => page.draw(frame, area, &self.theme, &self.keybindings),
         }
     }
@@ -243,6 +247,8 @@ impl App {
             Page::DynamicDetail(page) => page.handle_input(key, keys),
             Page::VideoDetail(page) => page.handle_input(key, keys),
             Page::History(page) => page.handle_input(key, keys),
+            Page::Live(page) => page.handle_input(key, keys),
+            Page::LiveDetail(page) => page.handle_input(key, keys),
             Page::Settings(page) => page.handle_input(key, keys),
         };
 
@@ -260,6 +266,8 @@ impl App {
             Page::DynamicDetail(page) => page.handle_mouse(event, area),
             Page::VideoDetail(page) => page.handle_mouse(event, area),
             Page::History(page) => page.handle_mouse(event, area),
+            Page::Live(page) => page.handle_mouse(event, area),
+            Page::LiveDetail(page) => page.handle_mouse(event, area),
             Page::Settings(page) => page.handle_mouse(event, area),
         };
 
@@ -294,9 +302,7 @@ impl App {
             }
             AppAction::LoginSuccess(creds) => {
                 // Save credentials
-                if let Err(e) = crate::storage::save_credentials(&creds) {
-                    eprintln!("Failed to save credentials: {}", e);
-                }
+                let _ = crate::storage::save_credentials(&creds);
                 self.credentials = Some(creds.clone());
                 // Update API client with new cookies
                 {
@@ -314,7 +320,7 @@ impl App {
                 duration,
             } => {
                 let api_client = self.api_client.clone();
-                if let Err(e) = crate::player::play_video(
+                let _ = crate::player::play_video(
                     api_client,
                     &bvid,
                     aid,
@@ -323,10 +329,7 @@ impl App {
                     None,
                     self.credentials.as_ref(),
                 )
-                .await
-                {
-                    eprintln!("Failed to play video: {}", e);
-                }
+                .await;
             }
             AppAction::PlayVideoWithPages {
                 bvid,
@@ -338,7 +341,7 @@ impl App {
                 if current_index < pages.len() {
                     let page = &pages[current_index];
                     let api_client = self.api_client.clone();
-                    if let Err(e) = crate::player::play_video(
+                    let _ = crate::player::play_video(
                         api_client,
                         &bvid,
                         aid,
@@ -347,10 +350,7 @@ impl App {
                         Some(page.page),
                         self.credentials.as_ref(),
                     )
-                    .await
-                    {
-                        eprintln!("Failed to play video: {}", e);
-                    }
+                    .await;
                     // Update current page index in video detail page
                     if let Page::VideoDetail(detail_page) = &mut self.current_page {
                         if detail_page.bvid == bvid {
@@ -457,6 +457,11 @@ impl App {
                     Some(PreviousPage::History) => {
                         self.sidebar.select(NavItem::History);
                         self.current_page = Page::History(HistoryPage::new());
+                        self.init_current_page().await;
+                    }
+                    Some(PreviousPage::Live) => {
+                        self.sidebar.select(NavItem::Live);
+                        self.current_page = Page::Live(LivePage::new());
                         self.init_current_page().await;
                     }
                     None => {
@@ -569,9 +574,7 @@ impl App {
                 self.current_page = Page::Settings(Box::new(page));
             }
             AppAction::Logout => {
-                if let Err(e) = crate::storage::delete_credentials() {
-                    eprintln!("Failed to delete credentials: {}", e);
-                }
+                let _ = crate::storage::delete_credentials();
                 self.credentials = None;
                 self.current_page = Page::Login(LoginPage::new());
                 self.init_current_page().await;
@@ -585,36 +588,26 @@ impl App {
                 // Toggle like - if already liked, unlike
                 if let Page::VideoDetail(page) = &mut self.current_page {
                     let is_liked = page.liked_comments.contains(&rpid);
-                    match client
+                    if let Ok(()) = client
                         .like_comment(oid, rpid, comment_type, !is_liked)
                         .await
                     {
-                        Ok(()) => {
-                            if is_liked {
-                                page.liked_comments.remove(&rpid);
-                            } else {
-                                page.liked_comments.insert(rpid);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to like comment: {}", e);
+                        if is_liked {
+                            page.liked_comments.remove(&rpid);
+                        } else {
+                            page.liked_comments.insert(rpid);
                         }
                     }
                 } else if let Page::DynamicDetail(page) = &mut self.current_page {
                     let is_liked = page.liked_comments.contains(&rpid);
-                    match client
+                    if let Ok(()) = client
                         .like_comment(oid, rpid, comment_type, !is_liked)
                         .await
                     {
-                        Ok(()) => {
-                            if is_liked {
-                                page.liked_comments.remove(&rpid);
-                            } else {
-                                page.liked_comments.insert(rpid);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to like comment: {}", e);
+                        if is_liked {
+                            page.liked_comments.remove(&rpid);
+                        } else {
+                            page.liked_comments.insert(rpid);
                         }
                     }
                 }
@@ -626,29 +619,56 @@ impl App {
                 root,
             } => {
                 let client = self.api_client.clone();
-                match client
+                if let Ok(_response) = client
                     .add_comment(oid, comment_type, &message, root, root)
                     .await
                 {
-                    Ok(_response) => {
-                        // Reload comments to show new comment
-                        if let Page::VideoDetail(page) = &mut self.current_page {
-                            page.load_data(&client).await;
-                        } else if let Page::DynamicDetail(page) = &mut self.current_page {
-                            page.load_data(&client).await;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to add comment: {}", e);
+                    // Reload comments to show new comment
+                    if let Page::VideoDetail(page) = &mut self.current_page {
+                        page.load_data(&client).await;
+                    } else if let Page::DynamicDetail(page) = &mut self.current_page {
+                        page.load_data(&client).await;
                     }
                 }
             }
             AppAction::SaveKeybindings(new_keybindings) => {
                 self.keybindings = (*new_keybindings).clone();
                 self.config.keybindings = *new_keybindings;
-                if let Err(e) = crate::storage::save_config(&self.config) {
-                    eprintln!("Failed to save keybindings: {}", e);
+                let _ = crate::storage::save_config(&self.config);
+            }
+            AppAction::SwitchToLive => {
+                self.sidebar.select(NavItem::Live);
+                self.current_page = Page::Live(LivePage::new());
+                self.init_current_page().await;
+            }
+            AppAction::OpenLiveDetail(room_id) => {
+                self.save_previous_page();
+                let mut detail_page = LiveDetailPage::new(room_id);
+                let client = &self.api_client;
+                detail_page.load_room_info(client).await;
+                // Connect WebSocket for real-time messages
+                let uid = self
+                    .credentials
+                    .as_ref()
+                    .and_then(|c| c.dede_user_id.parse::<i64>().ok())
+                    .unwrap_or(0);
+                detail_page.connect_ws(client, uid).await;
+                self.current_page = Page::LiveDetail(Box::new(detail_page));
+            }
+            AppAction::RefreshLive => {
+                if let Page::Live(page) = &mut self.current_page {
+                    let client = &self.api_client;
+                    page.refresh(client).await;
                 }
+            }
+            AppAction::LoadMoreLive => {
+                if let Page::Live(page) = &mut self.current_page {
+                    let client = &self.api_client;
+                    page.load_more(client).await;
+                }
+            }
+            AppAction::PlayLive { room_id, title: _ } => {
+                let _ = crate::player::play_live(room_id).await;
             }
             AppAction::None => {}
         }
@@ -698,6 +718,12 @@ impl App {
                 if !matches!(self.current_page, Page::Settings(_)) {
                     let page = SettingsPage::new(self.keybindings.clone(), self.theme_variant);
                     self.current_page = Page::Settings(Box::new(page));
+                }
+            }
+            NavItem::Live => {
+                if !matches!(self.current_page, Page::Live(_)) {
+                    self.current_page = Page::Live(LivePage::new());
+                    self.init_current_page().await;
                 }
             }
         }
@@ -763,6 +789,14 @@ impl App {
                 let client = self.api_client.clone();
                 page.load_history(&client).await;
             }
+            Page::Live(page) => {
+                let client = self.api_client.clone();
+                page.load_recommendations(&client).await;
+            }
+            Page::LiveDetail(page) => {
+                let client = self.api_client.clone();
+                page.load_room_info(&client).await;
+            }
             Page::Settings(_) => {
                 // Settings doesn't need async initialization
             }
@@ -804,9 +838,7 @@ impl App {
 
     fn save_theme_to_config(&mut self) {
         self.config.theme = self.theme_variant.to_string();
-        if let Err(e) = crate::storage::save_config(&self.config) {
-            eprintln!("Failed to save config: {}", e);
-        }
+        if crate::storage::save_config(&self.config).is_err() {}
     }
 }
 
