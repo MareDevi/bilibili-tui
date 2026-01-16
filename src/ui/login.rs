@@ -5,8 +5,11 @@ use crate::api::auth::{QrcodeData, QrcodePollStatus};
 use crate::api::client::ApiClient;
 use crate::app::AppAction;
 use crate::storage::{Credentials, Keybindings};
+use image::DynamicImage;
 use qrcode::QrCode;
 use ratatui::{crossterm::event::KeyCode, prelude::*, widgets::*};
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tui_qrcode::{Colors, QrCodeWidget, QuietZone};
 
@@ -15,21 +18,28 @@ pub struct LoginPage {
     error_message: Option<String>,
     poll_status: QrcodePollStatus,
     last_poll: Option<Instant>,
+    picker: Arc<Picker>,
+    qr_image_protocol: Option<StatefulProtocol>,
 }
 
 impl LoginPage {
     pub fn new() -> Self {
+        let picker = Arc::new(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()));
         Self {
             qrcode_data: None,
             error_message: None,
             poll_status: QrcodePollStatus::Waiting,
             last_poll: None,
+            picker,
+            qr_image_protocol: None,
         }
     }
 
     pub async fn load_qrcode(&mut self, api_client: &ApiClient) {
         match api_client.get_qrcode_data().await {
             Ok(data) => {
+                // Generate QR code image if the terminal supports it
+                self.qr_image_protocol = Self::generate_qr_image(&data.url, &self.picker);
                 self.qrcode_data = Some(data);
                 self.error_message = None;
                 self.poll_status = QrcodePollStatus::Waiting;
@@ -39,6 +49,22 @@ impl LoginPage {
                 self.error_message = Some(format!("获取二维码失败: {}", e));
             }
         }
+    }
+
+    /// Generate QR code image for terminal display
+    fn generate_qr_image(url: &str, picker: &Picker) -> Option<StatefulProtocol> {
+        let qr_code = QrCode::new(url.as_bytes()).ok()?;
+
+        // Render QR code to an image with proper scaling
+        // Use image::Luma<u8> which implements the required trait
+        let image = qr_code
+            .render::<image::Luma<u8>>()
+            .min_dimensions(200, 200) // Minimum size for good scanning
+            .max_dimensions(400, 400) // Maximum size to fit in terminal
+            .build();
+
+        let dynamic_image = DynamicImage::ImageLuma8(image);
+        Some(picker.new_resize_protocol(dynamic_image))
     }
 
     pub async fn tick(&mut self, api_client: &ApiClient) -> Option<AppAction> {
@@ -181,7 +207,12 @@ impl Component for LoginPage {
             frame.render_widget(qr_block.clone(), chunks[1]);
             let inner_area = qr_block.inner(chunks[1]);
 
-            if let Ok(qr_code) = QrCode::new(&qrcode_data.url) {
+            // Try to render as image first (for better visual quality in supported terminals)
+            if let Some(ref mut protocol) = self.qr_image_protocol {
+                let image = StatefulImage::new();
+                frame.render_stateful_widget(image, inner_area, protocol);
+            } else if let Ok(qr_code) = QrCode::new(&qrcode_data.url) {
+                // Fallback to character-based QR code
                 // Create QR code widget with optimized settings for scanning:
                 // - Inverted colors: black modules on white background (standard QR format)
                 // - QuietZone::Enabled: white border around QR for better scanning
@@ -275,6 +306,7 @@ impl Component for LoginPage {
         if keys.matches_refresh(key) {
             // Request refresh - will be handled by App
             self.qrcode_data = None;
+            self.qr_image_protocol = None;
             self.poll_status = QrcodePollStatus::Waiting;
             return Some(AppAction::SwitchToLogin);
         }
