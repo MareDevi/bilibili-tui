@@ -507,6 +507,12 @@ impl Component for HomePage {
         key: KeyCode,
         keys: &crate::storage::Keybindings,
     ) -> Option<AppAction> {
+        // Search input has priority: when the search box is focused, every
+        // character (including `i` / `/` which are also `search_focus` shortcuts)
+        // must be inserted as text, not as a shortcut.
+        if self.selected_source == 0 && self.search.input_mode {
+            return self.search.handle_input(key, keys);
+        }
         if keys.matches_quit(key) {
             return Some(AppAction::Quit);
         }
