@@ -1,3 +1,71 @@
 [tools]
 prek = "latest"
 rust = "stable"
+
+[tasks.release]
+description = "更新版本、生成 CHANGELOG，并推送 GitHub Release tag"
+usage = '''
+arg "<version>" help="要发布的 SemVer 版本号，例如 1.0.14"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+version="${usage_version:-}"
+if [[ -z "$version" ]]; then
+  echo "用法: mise run release <version>"
+  echo "示例: mise run release 1.0.14"
+  exit 1
+fi
+
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  echo "错误: 版本号必须是有效的 SemVer: $version" >&2
+  exit 1
+fi
+
+if [[ "$(git branch --show-current)" != "main" ]]; then
+  echo "错误: 发版必须从 main 分支执行" >&2
+  exit 1
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "错误: 工作区不干净，请先提交或暂存现有改动" >&2
+  exit 1
+fi
+
+if ! command -v git-cliff >/dev/null 2>&1; then
+  echo "错误: 未找到 git-cliff，请先安装 git-cliff" >&2
+  exit 1
+fi
+
+if git rev-parse "v$version" >/dev/null 2>&1; then
+  echo "错误: tag v$version 已存在" >&2
+  exit 1
+fi
+
+current_version="$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)"
+if [[ -z "$current_version" ]]; then
+  echo "错误: 无法从 Cargo.toml 读取当前版本" >&2
+  exit 1
+fi
+
+if [[ "$version" == "$current_version" ]]; then
+  echo "错误: 新版本与当前版本相同 ($current_version)" >&2
+  exit 1
+fi
+
+echo "将 bilibili-tui 从 $current_version 发布到 $version"
+
+sed -i -E '0,/^version = "[^"]+"/s//version = "'"$version"'"/' Cargo.toml
+cargo check --quiet
+git-cliff --tag "v$version" --output CHANGELOG.md
+
+git add Cargo.toml Cargo.lock CHANGELOG.md
+git commit -m "chore(release): prepare for v$version"
+git tag --annotate "v$version" --message "Release v$version"
+git push origin HEAD:main
+git push origin "v$version"
+
+echo "发布已提交并推送: v$version"
+echo "GitHub Actions 将开始构建并创建 Release。"
+'''
