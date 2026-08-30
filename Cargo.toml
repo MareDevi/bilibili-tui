@@ -1,6 +1,6 @@
 [package]
 name = "bilibili-tui"
-version = "1.0.13"
+version = "1.0.14"
 edition = "2024"
 authors = ["MareDevi <me@maredevi.moe>"]
 description = "A terminal user interface (TUI) client for Bilibili"

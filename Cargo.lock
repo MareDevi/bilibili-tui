@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "bilibili-tui"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "anyhow",
  "brotli",

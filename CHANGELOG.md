@@ -1,3 +1,14 @@
+## [1.0.14] - 2026-08-30
+
+### 🚀 Features
+
+- *(release)* Add mise task to release
+
+### 🐛 Bug Fixes
+
+- *(player)* Restore buffering for VOD playback (#41)
+- *(home)* Allow typing 'i' in search input when focused (#39)
+- *(settings)* Allow theme list to scroll beyond visible viewport (#38)
 ## [1.0.13] - 2026-08-03
 
 ### 🚀 Features
@@ -17,6 +28,10 @@
 ### 🐛 Bug Fixes
 
 - Harden playback and playlist lifecycle
+
+### ⚙️ Miscellaneous Tasks
+
+- *(release)* Bump version to 1.0.12 and update CHANGELOG
 ## [1.0.11] - 2026-04-20
 
 ### 🚀 Features
