@@ -35,6 +35,20 @@ fn ytdl_format(quality: VideoQuality) -> String {
     }
 }
 
+fn configure_vod_buffering(cmd: &mut Command) {
+    // Separated DASH streams need normal buffering. Explicitly restore these
+    // values so VOD playback is not affected by mpv's low-latency profile.
+    cmd.arg("--audio-buffer=0.2");
+    cmd.arg("--vd-lavc-threads=0");
+    cmd.arg("--cache=yes");
+    cmd.arg("--cache-pause=yes");
+    cmd.arg("--demuxer-lavf-o=");
+    cmd.arg("--demuxer-lavf-probe-info=auto");
+    cmd.arg("--demuxer-lavf-analyzeduration=0");
+    cmd.arg("--video-latency-hacks=no");
+    cmd.arg("--stream-buffer-size=128KiB");
+}
+
 /// Play a video using mpv with yt-dlp and report watch progress
 /// This function spawns mpv in a background task to avoid blocking the TUI
 #[allow(clippy::too_many_arguments)]
@@ -91,8 +105,7 @@ pub async fn play_video(
     };
 
     cmd.arg("--force-window=immediate");
-    // Use MPV's low-latency profile for Bilibili VOD playback.
-    cmd.arg("--profile=low-latency");
+    configure_vod_buffering(&mut cmd);
     // The TUI owns VOD danmaku rendering through the same OSD script used by
     // live playback. Do not pass CID to global MPV scripts, which would add a
     // second ASS subtitle track.
@@ -1508,6 +1521,33 @@ mod playlist_tests {
             duration: None,
             page: None,
         }
+    }
+
+    #[test]
+    fn vod_mpv_uses_normal_buffering_settings() {
+        let mut command = Command::new("mpv");
+        configure_vod_buffering(&mut command);
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            [
+                "--audio-buffer=0.2",
+                "--vd-lavc-threads=0",
+                "--cache=yes",
+                "--cache-pause=yes",
+                "--demuxer-lavf-o=",
+                "--demuxer-lavf-probe-info=auto",
+                "--demuxer-lavf-analyzeduration=0",
+                "--video-latency-hacks=no",
+                "--stream-buffer-size=128KiB",
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "--profile=low-latency"));
     }
 
     #[test]
