@@ -1,3 +1,17 @@
+## [1.1.0] - 2026-11-24
+
+### 🚀 Features
+
+- *(settings)* Add minimal mode to disable recommendation feeds
+- *(live)* Support sending danmaku
+
+### 🐛 Bug Fixes
+
+- *(navigation)* Keep own space in the minimal sidebar tab cycle
+
+### ⚙️ Miscellaneous Tasks
+
+- *(mise)* Enable mr-boxington for Rust
 ## [1.0.14] - 2026-08-30
 
 ### 🚀 Features
