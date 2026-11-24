@@ -1,6 +1,6 @@
 [tools]
 prek = "latest"
-rust = "stable"
+rust = { version = "stable", mr_boxington = true }
 
 [tasks.release]
 description = "更新版本、生成 CHANGELOG，并推送 GitHub Release tag"
