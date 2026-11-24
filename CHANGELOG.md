@@ -8,6 +8,7 @@
 ### 🐛 Bug Fixes
 
 - *(navigation)* Keep own space in the minimal sidebar tab cycle
+- *(release)* Build Apple Silicon artifacts on the supported `macos-15` runner.
 
 ### ⚙️ Miscellaneous Tasks
 
