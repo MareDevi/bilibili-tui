@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
-use quick_xml::Reader;
 use quick_xml::escape::unescape;
 use quick_xml::events::Event;
+use quick_xml::{Reader, XmlVersion};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoDanmaku {
@@ -15,13 +15,13 @@ pub fn parse_xml(xml: &str) -> Result<Vec<VideoDanmaku>> {
     let mut danmaku = Vec::new();
     loop {
         match reader.read_event()? {
-            Event::Start(event) if event.name().as_ref() == b"d" => {
+            Event::Start(event) if event.name().as_ref() == "d" => {
                 let metadata = event
                     .attributes()
                     .flatten()
-                    .find(|attribute| attribute.key.as_ref() == b"p")
+                    .find(|attribute| attribute.key.as_ref() == "p")
                     .ok_or_else(|| anyhow!("danmaku entry is missing p metadata"))?
-                    .unescape_value()?;
+                    .normalized_value(XmlVersion::Implicit1_0)?;
                 let mut fields = metadata.split(',');
                 let time = fields.next().and_then(|value| value.parse().ok());
                 let _mode = fields.next();

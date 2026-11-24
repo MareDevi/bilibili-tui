@@ -91,7 +91,7 @@ bilibili-tui 是一个现代化的终端应用程序，让你能够在终端中�
 
 ## 🛠️ 技术栈
 
-- **UI 框架**: [Ratatui](https://github.com/ratatui-org/ratatui) v0.30.0
+- **UI 框架**: [Ratatui](https://github.com/ratatui-org/ratatui)
 - **异步运行时**: [Tokio](https://tokio.rs/) (full features)
 - **HTTP 客户端**: [reqwest](https://docs.rs/reqwest/) (JSON + cookies)
 - **图片处理**: [image](https://docs.rs/image/) crate
