@@ -346,6 +346,45 @@ mod tests {
     }
 }
 
+#[derive(Deserialize)]
+pub(super) struct SendDanmakuResponse {
+    code: i32,
+    message: Option<String>,
+    msg: Option<String>,
+}
+
+impl SendDanmakuResponse {
+    pub(super) fn into_result(self) -> anyhow::Result<()> {
+        let message = self
+            .message
+            .filter(|message| !message.is_empty())
+            .or_else(|| self.msg.filter(|msg| !msg.is_empty()));
+        match (self.code, message) {
+            (0, None) => Ok(()),
+            (0, Some(message)) => Err(anyhow::anyhow!("{message}")),
+            (code, message) => Err(anyhow::anyhow!(
+                "B站返回错误 {code}: {}",
+                message.as_deref().unwrap_or("无错误详情")
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod live_danmaku_send_tests {
+    use super::SendDanmakuResponse;
+
+    #[test]
+    fn live_danmaku_send_rejection_is_reported_even_with_zero_code() {
+        let response: SendDanmakuResponse =
+            serde_json::from_str(r#"{"code":0,"message":"","msg":"弹幕发送频率过快"}"#).unwrap();
+        assert_eq!(
+            response.into_result().unwrap_err().to_string(),
+            "弹幕发送频率过快"
+        );
+    }
+}
+
 /// Live room detailed info from get_info API
 #[derive(Debug, Clone, Deserialize)]
 pub struct LiveRoomInfo {

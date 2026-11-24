@@ -4,7 +4,7 @@ use super::wbi;
 use crate::storage::{Credentials, VideoQuality};
 use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
-use reqwest::header::{COOKIE, HeaderMap, HeaderValue, REFERER, USER_AGENT};
+use reqwest::header::{COOKIE, HeaderMap, HeaderValue, ORIGIN, REFERER, USER_AGENT};
 use serde::Deserialize;
 use std::fs::{self, OpenOptions};
 use std::io::Read;
@@ -1413,6 +1413,53 @@ impl ApiClient {
         api_resp
             .data
             .ok_or_else(|| anyhow::anyhow!("No data in live room info response"))
+    }
+
+    pub(crate) async fn send_live_danmaku(&self, room_id: i64, message: &str) -> Result<()> {
+        #[derive(serde::Serialize)]
+        struct Form<'a> {
+            roomid: i64,
+            msg: &'a str,
+            rnd: i64,
+            fontsize: u8,
+            color: u32,
+            mode: u8,
+            csrf: &'a str,
+        }
+
+        let request = {
+            let cookies = self.cookies.read().expect("cookies lock poisoned");
+            let login_required = || anyhow!("发送直播弹幕需要登录，请前往设置页登录");
+            let cookies = cookies.as_deref().ok_or_else(login_required)?;
+            let csrf = cookies
+                .split(';')
+                .find_map(|part| part.trim().strip_prefix("bili_jct="))
+                .filter(|csrf| !csrf.is_empty())
+                .ok_or_else(login_required)?;
+
+            self.client
+                .post("https://api.live.bilibili.com/msg/send")
+                .header(COOKIE, cookies)
+                .header(ORIGIN, "https://live.bilibili.com")
+                .header(REFERER, format!("https://live.bilibili.com/{room_id}"))
+                .form(&Form {
+                    roomid: room_id,
+                    msg: message,
+                    rnd: chrono::Utc::now().timestamp(),
+                    fontsize: 25,
+                    color: 0xFFFFFF,
+                    mode: 1,
+                    csrf,
+                })
+        };
+
+        request
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<super::live::SendDanmakuResponse>()
+            .await?
+            .into_result()
     }
 
     /// Get danmu info for WebSocket connection

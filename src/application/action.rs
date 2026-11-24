@@ -139,6 +139,10 @@ pub enum AppAction {
     RefreshLive,
     /// Load more live rooms
     LoadMoreLive,
+    SendLiveDanmaku {
+        room_id: i64,
+        message: String,
+    },
     /// Play live stream
     PlayLive {
         room_id: i64,

@@ -181,6 +181,11 @@ impl App {
                     }
                 }
             }
+            network::NetworkEvent::LiveDanmakuSent { req_id, result } => {
+                if let Page::LiveDetail(page) = &mut self.current_page {
+                    page.finish_danmaku_send(req_id, result);
+                }
+            }
             network::NetworkEvent::VideoDetailLoaded {
                 req_id,
                 bvid,

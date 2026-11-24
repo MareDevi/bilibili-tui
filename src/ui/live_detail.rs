@@ -52,6 +52,10 @@ pub struct LiveDetailPage {
     entries: VecDeque<EntryItem>,
     popularity: Option<u32>,
     history_loaded: bool,
+
+    danmaku_input: Option<String>,
+    danmaku_request: Option<u64>,
+    danmaku_result: Option<Result<(), String>>,
 }
 
 impl LiveDetailPage {
@@ -69,6 +73,9 @@ impl LiveDetailPage {
             entries: VecDeque::with_capacity(MAX_MESSAGES),
             popularity: None,
             history_loaded: false,
+            danmaku_input: None,
+            danmaku_request: None,
+            danmaku_result: None,
         }
     }
 
@@ -133,6 +140,26 @@ impl LiveDetailPage {
     pub fn set_ws_error(&mut self, error: impl Into<String>) {
         self.ws_connected = false;
         self.ws_error = Some(error.into());
+    }
+
+    pub(crate) fn begin_danmaku_send(&mut self, req_id: u64) {
+        self.danmaku_request = Some(req_id);
+        self.danmaku_result = None;
+    }
+
+    pub(crate) fn finish_danmaku_send(
+        &mut self,
+        req_id: u64,
+        result: Result<(), (String, String)>,
+    ) {
+        if self.danmaku_request != Some(req_id) {
+            return;
+        }
+        self.danmaku_request = None;
+        self.danmaku_result = Some(result.map_err(|(draft, error)| {
+            self.danmaku_input = Some(draft);
+            format!("发送失败：{error}")
+        }));
     }
 
     /// Poll for new messages from WebSocket
@@ -281,13 +308,42 @@ impl Component for LiveDetailPage {
     }
 
     fn handle_input(&mut self, key: KeyCode, keys: &Keybindings) -> Option<AppAction> {
+        if let Some(draft) = &mut self.danmaku_input {
+            match key {
+                KeyCode::Esc => {
+                    self.danmaku_input = None;
+                    self.danmaku_result = None;
+                }
+                KeyCode::Enter if !draft.trim().is_empty() => {
+                    let room_id = self.room_info.as_ref()?.room_id;
+                    let message = std::mem::take(draft);
+                    self.danmaku_input = None;
+                    return Some(AppAction::SendLiveDanmaku { room_id, message });
+                }
+                KeyCode::Backspace => {
+                    draft.pop();
+                }
+                KeyCode::Char(c) => draft.push(c),
+                _ => {}
+            }
+            return Some(AppAction::None);
+        }
+
         if keys.matches_quit(key) || keys.matches_back(key) {
             Some(AppAction::BackToList)
+        } else if self.danmaku_request.is_some() {
+            Some(AppAction::None)
         } else if keys.matches_confirm(key) || keys.matches_play(key) {
             self.room_info.as_ref().map(|info| AppAction::PlayLive {
                 room_id: info.room_id,
                 title: info.title.clone(),
             })
+        } else if keys.matches_comment(key) {
+            if self.room_info.is_some() {
+                self.danmaku_input = Some(String::new());
+                self.danmaku_result = None;
+            }
+            Some(AppAction::None)
         } else if keys.matches_next_theme(key) {
             Some(AppAction::NextTheme)
         } else if keys.matches_open_settings(key) {
@@ -307,11 +363,18 @@ impl LiveDetailPage {
         theme: &Theme,
         keys: &Keybindings,
     ) {
-        // Layout: main content + bottom hints
+        let input_height = u16::from(self.danmaku_input.is_some());
+        let status_height = match &self.danmaku_result {
+            Some(Err(_)) => 2,
+            Some(Ok(())) => 1,
+            None => u16::from(self.danmaku_request.is_some()),
+        };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10),   // Content
+                Constraint::Min(10), // Content
+                Constraint::Length(status_height),
+                Constraint::Length(input_height),
                 Constraint::Length(1), // Hints
             ])
             .split(area);
@@ -343,24 +406,67 @@ impl LiveDetailPage {
         // Entry panel
         self.render_entry_panel(frame, right_chunks[1], theme);
 
-        // Bottom hints
-        let hints = Paragraph::new(shortcut_footer(
-            theme,
-            [
-                (
-                    format!("{}/{}", keys.confirm, keys.play),
-                    "播放".into(),
-                    theme.success,
-                ),
-                (
+        if let Some((message, color)) = match &self.danmaku_result {
+            Some(Ok(())) => Some(("弹幕已发送", theme.success)),
+            Some(Err(error)) => Some((error.as_str(), theme.error)),
+            None if self.danmaku_request.is_some() => Some(("正在发送弹幕…", theme.fg_muted)),
+            None => None,
+        } {
+            frame.render_widget(
+                Paragraph::new(message).fg(color).wrap(Wrap { trim: true }),
+                chunks[1],
+            );
+        }
+
+        let hints = if let Some(draft) = &self.danmaku_input {
+            let input = Line::from(vec![
+                Span::styled("弹幕：", Style::default().fg(theme.info)),
+                Span::raw(draft.as_str()),
+                Span::styled("_", Style::default().fg(theme.info)),
+            ]);
+            let offset = input.width().saturating_sub(usize::from(chunks[2].width));
+            frame.render_widget(
+                Paragraph::new(input).scroll((0, offset.min(usize::from(u16::MAX)) as u16)),
+                chunks[2],
+            );
+            shortcut_footer(
+                theme,
+                [
+                    ("Enter".into(), "发送".into(), theme.success),
+                    ("Esc".into(), "取消".into(), theme.info),
+                ],
+            )
+        } else if self.danmaku_request.is_some() {
+            shortcut_footer(
+                theme,
+                [(
                     format!("{}/{}", keys.back, keys.quit),
                     "返回".into(),
                     theme.info,
-                ),
-            ],
-        ))
-        .alignment(Alignment::Center);
-        frame.render_widget(hints, chunks[1]);
+                )],
+            )
+        } else {
+            shortcut_footer(
+                theme,
+                [
+                    (keys.comment.clone(), "发弹幕".into(), theme.info),
+                    (
+                        format!("{}/{}", keys.confirm, keys.play),
+                        "播放".into(),
+                        theme.success,
+                    ),
+                    (
+                        format!("{}/{}", keys.back, keys.quit),
+                        "返回".into(),
+                        theme.info,
+                    ),
+                ],
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(hints).alignment(Alignment::Center),
+            chunks[3],
+        );
     }
 
     fn render_info_panel(&self, frame: &mut Frame, area: Rect, info: &LiveRoomInfo, theme: &Theme) {

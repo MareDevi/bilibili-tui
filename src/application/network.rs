@@ -141,6 +141,11 @@ pub enum NetworkCommand {
         req_id: u64,
         season_id: i64,
     },
+    SendLiveDanmaku {
+        req_id: u64,
+        room_id: i64,
+        message: String,
+    },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -195,6 +200,10 @@ pub enum NetworkEvent {
         req_id: u64,
         append: bool,
         rooms: Vec<LiveRoom>,
+    },
+    LiveDanmakuSent {
+        req_id: u64,
+        result: Result<(), (String, String)>,
     },
     VideoDetailLoaded {
         req_id: u64,
@@ -355,6 +364,7 @@ impl NetworkCommand {
             Self::DeleteHistory { .. } => "history_delete",
             Self::LoadArticle { .. } => "article_detail",
             Self::LoadLiveInit { .. } | Self::LoadLiveMore { .. } => "live",
+            Self::SendLiveDanmaku { .. } => "live_danmaku_send",
             Self::LoadVideoDetail { .. } => "video_detail",
             Self::LoadUpPage { .. } | Self::LoadUpVideos { .. } => "up",
             Self::LoadDynamicDetail { .. } => "dynamic_detail",
@@ -796,6 +806,17 @@ async fn handle_command(api_client: Arc<ApiClient>, command: NetworkCommand) -> 
                 },
                 Err(e) => failed(req_id, "live_more", e),
             }
+        }
+        NetworkCommand::SendLiveDanmaku {
+            req_id,
+            room_id,
+            message,
+        } => {
+            let result = api_client
+                .send_live_danmaku(room_id, message.trim())
+                .await
+                .map_err(|error| (message, error.to_string()));
+            NetworkEvent::LiveDanmakuSent { req_id, result }
         }
         NetworkCommand::LoadVideoDetail {
             req_id,

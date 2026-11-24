@@ -917,6 +917,24 @@ impl App {
                     self.send_network_command(network::NetworkCommand::LoadLiveMore { req_id });
                 }
             }
+            AppAction::SendLiveDanmaku { room_id, message } => {
+                let req_id = self.next_request_id("live_danmaku_send");
+                if let Page::LiveDetail(page) = &mut self.current_page {
+                    page.begin_danmaku_send(req_id);
+                    if let Err(std::sync::mpsc::SendError(
+                        network::NetworkCommand::SendLiveDanmaku { message, .. },
+                    )) = self
+                        .network_command_tx
+                        .send(network::NetworkCommand::SendLiveDanmaku {
+                            req_id,
+                            room_id,
+                            message,
+                        })
+                    {
+                        page.finish_danmaku_send(req_id, Err((message, "网络任务已停止".into())));
+                    }
+                }
+            }
             AppAction::PlayLive { room_id, title: _ } => {
                 let existing_hub = self
                     .live_danmaku_hub
