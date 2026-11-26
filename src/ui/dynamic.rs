@@ -166,7 +166,7 @@ impl DynamicPage {
                 if let Some(bvid) = item.video_bvid() {
                     let card = VideoCard::new(
                         Some(bvid.to_string()),
-                        None,
+                        item.video_aid(),
                         item.video_title().unwrap_or("无标题").to_string(),
                         item.author_name().to_string(),
                         format!("▶ {}", item.video_play()),
@@ -250,7 +250,7 @@ impl DynamicPage {
                 if let Some(bvid) = item.video_bvid() {
                     let card = VideoCard::new(
                         Some(bvid.to_string()),
-                        None,
+                        item.video_aid(),
                         item.video_title().unwrap_or("无标题").to_string(),
                         item.author_name().to_string(),
                         format!("▶ {}", item.video_play()),
@@ -596,7 +596,10 @@ impl Component for DynamicPage {
             if let Some(card) = self.grid.selected_card() {
                 // Video card - open video detail
                 if let Some(ref bvid) = card.bvid {
-                    return Some(AppAction::OpenVideoDetail(bvid.clone(), 0));
+                    return Some(AppAction::OpenVideoDetail(
+                        bvid.clone(),
+                        card.aid.unwrap_or(0),
+                    ));
                 }
                 // Non-video card (draw/opus) - open dynamic detail
                 else if let Some(item) = self.selected_dynamic_item()
@@ -706,7 +709,10 @@ impl Component for DynamicPage {
                         self.last_click_index = None;
                         if let Some(card) = self.grid.cards.get(click_idx) {
                             if let Some(ref bvid) = card.bvid {
-                                return Some(AppAction::OpenVideoDetail(bvid.clone(), 0));
+                                return Some(AppAction::OpenVideoDetail(
+                                    bvid.clone(),
+                                    card.aid.unwrap_or(0),
+                                ));
                             } else if let Some(item) = self.dynamic_items.get(click_idx)
                                 && (item.is_draw() || item.is_opus())
                                 && let Some(id) = &item.id_str
@@ -753,5 +759,58 @@ mod tests {
             Some(AppAction::None)
         ));
         assert!(!page.focus_up_list);
+    }
+
+    fn video_dynamic(archive_aid: &str) -> DynamicItem {
+        serde_json::from_str(&format!(
+            r#"{{
+              "id_str": "9001",
+              "type": "DYNAMIC_TYPE_AV",
+              "modules": {{"module_dynamic": {{"major": {{
+                "type": "MAJOR_TYPE_ARCHIVE",
+                "archive": {{"bvid": "BV1test", "title": "t", "aid": {archive_aid}}}
+              }}}}
+              }}
+            }}"#
+        ))
+        .expect("video dynamic")
+    }
+
+    fn confirm_action(page: &mut DynamicPage) -> Option<AppAction> {
+        page.focus_up_list = false;
+        page.handle_input_with_modifiers(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+            &Keybindings::default(),
+        )
+    }
+
+    #[test]
+    fn set_feed_and_append_feed_preserve_video_aid() {
+        let mut page = DynamicPage::new();
+        page.set_feed(vec![video_dynamic("\"123\"")], None, false);
+        assert_eq!(page.grid.cards.first().and_then(|card| card.aid), Some(123));
+        page.append_feed(vec![video_dynamic("456")], None, false);
+        assert_eq!(page.grid.cards.get(1).and_then(|card| card.aid), Some(456));
+    }
+
+    #[test]
+    fn confirm_video_card_opens_detail_with_card_aid() {
+        let mut page = DynamicPage::new();
+        page.set_feed(vec![video_dynamic("\"123\"")], None, false);
+        assert!(matches!(
+            confirm_action(&mut page),
+            Some(AppAction::OpenVideoDetail(bvid, 123)) if bvid == "BV1test"
+        ));
+    }
+
+    #[test]
+    fn confirm_video_card_without_aid_opens_detail_with_zero() {
+        let mut page = DynamicPage::new();
+        page.set_feed(vec![video_dynamic("null")], None, false);
+        assert!(matches!(
+            confirm_action(&mut page),
+            Some(AppAction::OpenVideoDetail(bvid, 0)) if bvid == "BV1test"
+        ));
     }
 }

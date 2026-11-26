@@ -250,6 +250,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn video_detail_loaded_adopts_authoritative_aid_for_follow_up_requests() {
+        use crate::application::network::NetworkEvent;
+        let (mut app, _rx) = minimal_app();
+        let req_id = app.next_request_id("video_detail");
+        app.current_page =
+            Page::VideoDetail(Box::new(VideoDetailPage::new("BV1test".to_string(), 0)));
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        app.network_event_rx = event_rx;
+        event_tx
+            .send(NetworkEvent::VideoDetailLoaded {
+                req_id,
+                bvid: "BV1test".to_string(),
+                video_info: serde_json::from_str(
+                    r#"{"bvid":"BV1test","aid":42,"cid":7,"title":"t","desc":null,"pic":null,
+                        "duration":null,"pubdate":null,"owner":{"mid":1,"name":"u","face":""},
+                        "stat":{"view":0,"danmaku":0,"like":0,"coin":0,"favorite":0,"share":0},
+                        "pages":null}"#,
+                )
+                .expect("video info"),
+                comments: Vec::new(),
+                has_more_comments: false,
+                related_videos: Vec::new(),
+            })
+            .expect("send event");
+
+        app.drain_network_events();
+
+        assert!(
+            matches!(&app.current_page, Page::VideoDetail(page) if page.aid == 42),
+            "loaded video info should replace the placeholder aid"
+        );
+    }
+
+    #[tokio::test]
     async fn minimal_mode_keeps_explicit_search_requests() {
         let (mut app, rx) = minimal_app();
         app.current_page = Page::Search(crate::presentation::tui::SearchPage::new());

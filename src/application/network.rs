@@ -828,17 +828,19 @@ async fn handle_command(api_client: Arc<ApiClient>, command: NetworkCommand) -> 
                 Ok(info) => info,
                 Err(e) => return failed(req_id, "video_detail", e),
             };
-            let (comments, has_more_comments) = match api_client.get_comments(aid, 1).await {
-                Ok(data) => {
-                    let comments = data.replies.unwrap_or_default();
-                    let has_more = data
-                        .page
-                        .map(|p| p.count.unwrap_or(0) > comments.len() as i32)
-                        .unwrap_or(false);
-                    (comments, has_more)
-                }
-                Err(_) => (Vec::new(), false),
-            };
+            let effective_aid = resolve_video_aid(video_info.aid, aid);
+            let (comments, has_more_comments) =
+                match api_client.get_comments(effective_aid, 1).await {
+                    Ok(data) => {
+                        let comments = data.replies.unwrap_or_default();
+                        let has_more = data
+                            .page
+                            .map(|p| p.count.unwrap_or(0) > comments.len() as i32)
+                            .unwrap_or(false);
+                        (comments, has_more)
+                    }
+                    Err(_) => (Vec::new(), false),
+                };
             let related_videos = if include_related {
                 api_client
                     .get_related_videos(&bvid)
@@ -949,6 +951,15 @@ async fn enrich_followers(api_client: &Arc<ApiClient>, videos: &mut [VideoItem])
     }
 }
 
+/// Prefer the authoritative aid from `/x/web-interface/view` over the caller's hint.
+fn resolve_video_aid(video_info_aid: i64, fallback_aid: i64) -> i64 {
+    if video_info_aid > 0 {
+        video_info_aid
+    } else {
+        fallback_aid
+    }
+}
+
 fn failed(req_id: u64, target: &'static str, error: anyhow::Error) -> NetworkEvent {
     let safe_error = redact_url_queries(&error.to_string());
     if let Some(mut dir) = dirs::config_dir() {
@@ -1003,6 +1014,7 @@ pub(crate) fn redact_url_queries(message: &str) -> String {
 #[cfg(test)]
 mod security_tests {
     use super::redact_url_queries;
+    use super::resolve_video_aid;
 
     #[test]
     fn network_log_redacts_url_query_parameters() {
@@ -1010,5 +1022,13 @@ mod security_tests {
             redact_url_queries("GET https://cdn.example/video?token=secret&expires=1 failed");
         assert_eq!(value, "GET https://cdn.example/video?<redacted> failed");
         assert!(!value.contains("secret"));
+    }
+
+    #[test]
+    fn video_aid_prefers_authoritative_video_info() {
+        assert_eq!(resolve_video_aid(42, 0), 42);
+        assert_eq!(resolve_video_aid(42, 7), 42);
+        assert_eq!(resolve_video_aid(0, 7), 7);
+        assert_eq!(resolve_video_aid(0, 0), 0);
     }
 }

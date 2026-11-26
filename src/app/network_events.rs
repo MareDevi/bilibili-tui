@@ -204,6 +204,9 @@ impl App {
                     if page.bvid != bvid {
                         return;
                     }
+                    if video_info.aid > 0 {
+                        page.aid = video_info.aid;
+                    }
                     page.video_info = Some(video_info);
                     page.comments = comments;
                     page.comment_page = 1;

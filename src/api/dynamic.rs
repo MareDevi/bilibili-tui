@@ -65,8 +65,120 @@ pub struct DynamicFeedData {
 
 #[cfg(test)]
 mod tests {
-    use super::DynamicFeedData;
+    use super::{DynamicFeedData, DynamicItem};
     use serde::Deserialize;
+
+    fn dynamic_item(json: &str) -> DynamicItem {
+        serde_json::from_str(json).expect("dynamic item")
+    }
+
+    fn video_item(archive_aid: &str, basic: &str) -> DynamicItem {
+        dynamic_item(&format!(
+            r#"{{
+              "id_str": "9001",
+              "type": "DYNAMIC_TYPE_AV",
+              "basic": {basic},
+              "modules": {{
+                "module_dynamic": {{"major": {{
+                  "type": "MAJOR_TYPE_ARCHIVE",
+                  "archive": {{"bvid": "BV1test", "aid": {archive_aid}}}
+                }}}}
+              }}
+            }}"#
+        ))
+    }
+
+    #[test]
+    fn archive_aid_accepts_string_number_and_null() {
+        for (raw, expected) in [
+            ("\"112981396619958\"", Some(112_981_396_619_958)),
+            ("112981396619958", Some(112_981_396_619_958)),
+            ("null", None),
+        ] {
+            let item = video_item(raw, "null");
+            let aid = item
+                .modules
+                .as_ref()
+                .and_then(|m| m.module_dynamic.as_ref())
+                .and_then(|d| d.major.as_ref())
+                .and_then(|m| m.archive.as_ref())
+                .and_then(|a| a.aid);
+            assert_eq!(aid, expected, "archive aid {raw}");
+        }
+    }
+
+    #[test]
+    fn video_aid_prefers_archive_then_basic_comment_id() {
+        let item = video_item(
+            "\"112981396619958\"",
+            r#"{"comment_id_str": "999", "comment_type": 1}"#,
+        );
+        assert_eq!(item.video_aid(), Some(112_981_396_619_958));
+
+        let fallback = video_item("null", r#"{"comment_id_str": "999", "comment_type": 1}"#);
+        assert_eq!(fallback.video_aid(), Some(999));
+
+        let none = video_item("0", r#"{"comment_id_str": "", "comment_type": 0}"#);
+        assert_eq!(none.video_aid(), None);
+    }
+
+    #[test]
+    fn video_dynamic_comment_target_uses_basic() {
+        let item = video_item(
+            "null",
+            r#"{"comment_id_str": "112981396619958", "comment_type": 1}"#,
+        );
+        assert_eq!(item.comment_type(), 1);
+        assert_eq!(item.comment_oid("9001"), Some(112_981_396_619_958));
+    }
+
+    #[test]
+    fn opus_album_comment_target_uses_basic_album_id() {
+        let item = dynamic_item(
+            r#"{
+              "id_str": "9002",
+              "type": "DYNAMIC_TYPE_DRAW",
+              "basic": {"comment_id_str": "555", "comment_type": 11},
+              "modules": {"module_dynamic": {"major": {"type": "MAJOR_TYPE_OPUS"}}}
+            }"#,
+        );
+        assert_eq!(item.comment_type(), 11);
+        assert_eq!(item.comment_oid("9002"), Some(555));
+    }
+
+    #[test]
+    fn pure_text_opus_comment_target_uses_basic_dynamic_id() {
+        let item = dynamic_item(
+            r#"{
+              "id_str": "9003",
+              "type": "DYNAMIC_TYPE_WORD",
+              "basic": {"comment_id_str": "9003", "comment_type": 17},
+              "modules": {"module_dynamic": {"major": {"type": "MAJOR_TYPE_OPUS"}}}
+            }"#,
+        );
+        assert_eq!(item.comment_type(), 17);
+        assert_eq!(item.comment_oid("9003"), Some(9003));
+    }
+
+    #[test]
+    fn empty_basic_falls_back_to_major_type_heuristics() {
+        let item = dynamic_item(
+            r#"{
+              "id_str": "9004",
+              "type": "DYNAMIC_TYPE_DRAW",
+              "basic": {"comment_id_str": "", "comment_type": 0},
+              "modules": {"module_dynamic": {"major": {
+                "type": "MAJOR_TYPE_DRAW",
+                "draw": {"id": "42"}
+              }}}
+            }"#,
+        );
+        assert_eq!(item.comment_type(), 11);
+        assert_eq!(item.comment_oid("9004"), Some(42));
+
+        let video = video_item("null", r#"{"comment_id_str": "", "comment_type": 0}"#);
+        assert_eq!(video.comment_type(), 1);
+    }
 
     #[test]
     fn feed_accepts_string_update_num() {
@@ -166,12 +278,23 @@ pub struct UpListItem {
     pub is_reserve_recall: bool,
 }
 
+/// Basic dynamic metadata, including the authoritative comment target.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DynamicBasic {
+    pub comment_id_str: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_i32")]
+    pub comment_type: Option<i32>,
+    pub rid_str: Option<String>,
+}
+
 /// Individual dynamic item
 #[derive(Debug, Clone, Deserialize)]
 pub struct DynamicItem {
     pub id_str: Option<String>,
     #[serde(rename = "type")]
     pub dynamic_type: Option<String>,
+    #[serde(default)]
+    pub basic: Option<DynamicBasic>,
     pub modules: Option<DynamicModules>,
 }
 
@@ -209,6 +332,8 @@ pub struct DynamicMajor {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArchiveInfo {
     pub bvid: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_i64")]
+    pub aid: Option<i64>,
     pub title: Option<String>,
     pub cover: Option<String>,
     pub desc: Option<String>,
@@ -344,6 +469,28 @@ impl DynamicItem {
             .and_then(|a| a.bvid.as_deref())
     }
 
+    /// Authoritative video aid for opening comments, preferring the archive payload.
+    pub fn video_aid(&self) -> Option<i64> {
+        let archive_aid = self
+            .modules
+            .as_ref()
+            .and_then(|m| m.module_dynamic.as_ref())
+            .and_then(|d| d.major.as_ref())
+            .and_then(|m| m.archive.as_ref())
+            .and_then(|a| a.aid);
+        if let Some(aid) = archive_aid.filter(|aid| *aid > 0) {
+            return Some(aid);
+        }
+        if !self.is_video() {
+            return None;
+        }
+        self.basic
+            .as_ref()
+            .and_then(|basic| basic.comment_id_str.as_deref())
+            .and_then(|id| id.parse::<i64>().ok())
+            .filter(|aid| *aid > 0)
+    }
+
     pub fn video_play(&self) -> &str {
         self.modules
             .as_ref()
@@ -442,10 +589,19 @@ impl DynamicItem {
     }
 
     /// Get the correct comment type code for this dynamic
+    /// Prefers `basic.comment_type` from the API; falls back to guessing from the major type.
     /// Type 11: 相簿（图片动态） - image/photo albums (MAJOR_TYPE_DRAW, MAJOR_TYPE_OPUS)
     /// Type 17: 动态（纯文字动态&分享） - text dynamics and shares
     /// Type 1: 视频 - videos (MAJOR_TYPE_ARCHIVE)
     pub fn comment_type(&self) -> i32 {
+        if let Some(comment_type) = self
+            .basic
+            .as_ref()
+            .and_then(|basic| basic.comment_type)
+            .filter(|comment_type| *comment_type > 0)
+        {
+            return comment_type;
+        }
         if let Some(major_type) = self
             .modules
             .as_ref()
@@ -464,9 +620,20 @@ impl DynamicItem {
     }
 
     /// Get the correct oid for comments
-    /// For image dynamics (MAJOR_TYPE_DRAW), use the draw.id
-    /// For other types, use the dynamic id itself
+    /// Prefers `basic.comment_id_str` from the API.
+    /// For image dynamics (MAJOR_TYPE_DRAW), falls back to the draw.id.
+    /// For videos, falls back to the archive aid.
+    /// For other types, falls back to the dynamic id itself.
     pub fn comment_oid(&self, dynamic_id: &str) -> Option<i64> {
+        if let Some(oid) = self
+            .basic
+            .as_ref()
+            .and_then(|basic| basic.comment_id_str.as_deref())
+            .and_then(|id| id.parse::<i64>().ok())
+            .filter(|oid| *oid > 0)
+        {
+            return Some(oid);
+        }
         if self.is_draw() {
             // For draw type, use the draw.id as oid
             self.modules
@@ -475,6 +642,8 @@ impl DynamicItem {
                 .and_then(|d| d.major.as_ref())
                 .and_then(|m| m.draw.as_ref())
                 .and_then(|draw| draw.id)
+        } else if self.is_video() {
+            self.video_aid()
         } else {
             // For other types, use the dynamic_id
             dynamic_id.parse::<i64>().ok()

@@ -127,6 +127,9 @@ impl VideoDetailPage {
         // Load video info
         match api_client.get_video_info(&self.bvid).await {
             Ok(info) => {
+                if info.aid > 0 {
+                    self.aid = info.aid;
+                }
                 self.video_info = Some(info);
             }
             Err(e) => {
