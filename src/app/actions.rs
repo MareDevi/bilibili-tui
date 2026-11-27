@@ -254,7 +254,7 @@ impl App {
                 self.send_network_command(network::NetworkCommand::CancelPending);
             }
             AppAction::Search(keyword) => {
-                let mut start_search = false;
+                let mut start_search = None;
                 match &mut self.current_page {
                     Page::Home(home) => {
                         let page = home.search_mut();
@@ -262,23 +262,40 @@ impl App {
                         page.page = 1;
                         page.loading = true;
                         page.show_hot_list = false;
-                        start_search = true;
+                        start_search = Some(page.search_kind);
                     }
                     Page::Search(page) => {
                         page.query = keyword.clone();
                         page.page = 1;
                         page.loading = true;
                         page.show_hot_list = false;
-                        start_search = true;
+                        start_search = Some(page.search_kind);
                     }
                     _ => {}
                 }
-                if start_search {
+                if let Some(kind) = start_search {
                     let req_id = self.next_request_id("search");
                     self.send_network_command(network::NetworkCommand::Search {
                         req_id,
                         keyword,
                         page: 1,
+                        kind,
+                    });
+                }
+            }
+            AppAction::SwitchSearchKind(kind) => {
+                let page = match &mut self.current_page {
+                    Page::Home(home) => Some(home.search_mut()),
+                    Page::Search(page) => Some(page),
+                    _ => None,
+                };
+                if let Some(keyword) = page.and_then(|page| page.begin_kind_switch(kind)) {
+                    let req_id = self.next_request_id("search");
+                    self.send_network_command(network::NetworkCommand::Search {
+                        req_id,
+                        keyword,
+                        page: 1,
+                        kind,
                     });
                 }
             }
@@ -585,7 +602,7 @@ impl App {
                             return;
                         }
                         page.loading_more = true;
-                        command = Some((page.query.clone(), page.page + 1));
+                        command = Some((page.query.clone(), page.page + 1, page.search_kind));
                     }
                     Page::Search(page) => {
                         if page.loading_more || page.query.is_empty() || page.show_hot_list {
@@ -595,16 +612,17 @@ impl App {
                             return;
                         }
                         page.loading_more = true;
-                        command = Some((page.query.clone(), page.page + 1));
+                        command = Some((page.query.clone(), page.page + 1, page.search_kind));
                     }
                     _ => {}
                 }
-                if let Some((keyword, next_page)) = command {
+                if let Some((keyword, next_page, kind)) = command {
                     let req_id = self.next_request_id("search");
                     self.send_network_command(network::NetworkCommand::Search {
                         req_id,
                         keyword,
                         page: next_page,
+                        kind,
                     });
                 }
             }
@@ -1099,6 +1117,14 @@ impl App {
                         self.navigation_stack
                             .push(Page::BangumiDetail(previous_page));
                     }
+                } else if matches!(self.current_page, Page::Search(_) | Page::Home(_)) {
+                    // Keep the search page on the stack so Esc restores its
+                    // query, selected kind and card selection.
+                    let previous = std::mem::replace(
+                        &mut self.current_page,
+                        Page::Bangumi(Box::<BangumiPage>::default()),
+                    );
+                    self.navigation_stack.push(previous);
                 } else {
                     self.save_previous_page();
                 }

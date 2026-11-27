@@ -2,6 +2,7 @@ use crate::api::bangumi::{BangumiRankDay, BangumiSeasonType, SeasonIndexQuery, T
 use crate::api::favorite::{FavoriteOrder, FavoriteSource};
 use crate::api::history::HistoryKey;
 use crate::api::recommend::HomeFeed;
+use crate::api::search::SearchKind;
 use crate::api::space::SpaceVideoOrder;
 use crate::api::video::VideoPage;
 use crate::domain::playback::{PlayOrder, PlaylistItem, PlaylistSource};
@@ -65,6 +66,8 @@ pub enum AppAction {
     CancelPendingLoads,
     /// Search for videos
     Search(String),
+    /// Switch the search category (video / bangumi / movie-TV)
+    SwitchSearchKind(SearchKind),
     /// Refresh dynamic feed
     RefreshDynamic,
     /// Open video detail page (bvid, aid)

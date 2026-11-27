@@ -828,6 +828,31 @@ impl ApiClient {
         }))
     }
 
+    /// Search bangumi (`media_bangumi`) or movie/TV (`media_ft`) results.
+    pub async fn search_media(
+        &self,
+        keyword: &str,
+        page: i32,
+        kind: super::search::SearchKind,
+    ) -> Result<super::search::MediaSearchData> {
+        let url = self.build_url(BilibiliApiDomain::Main, "/x/web-interface/wbi/search/type");
+
+        let params = vec![
+            ("search_type", kind.api_value().to_string()),
+            ("keyword", keyword.to_string()),
+            ("page", page.to_string()),
+        ];
+
+        let resp: ApiResponse<super::search::MediaSearchData> =
+            self.get_with_wbi(&url, params).await?;
+        Ok(resp.data.unwrap_or(super::search::MediaSearchData {
+            result: None,
+            num_results: Some(0),
+            page: Some(page),
+            pagesize: Some(20),
+        }))
+    }
+
     /// Fetch hot search keywords (web)
     pub async fn get_hot_search(&self) -> Result<Vec<super::search::HotwordItem>> {
         const HOTWORD_URL: &str = "https://s.search.bilibili.com/main/hotword";

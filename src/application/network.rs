@@ -15,8 +15,7 @@ use crate::api::{
     history::{HistoryCursor, HistoryData, HistoryKey},
     live::LiveRoom,
     recommend::{HomeFeed, VideoItem},
-    search::HotwordItem,
-    search::SearchVideoItem,
+    search::{HotwordItem, MediaSearchItem, SearchKind, SearchVideoItem},
     space::{RelationStat, SpaceInfo, SpaceVideoData, SpaceVideoOrder},
     video::RelatedVideoItem,
     video::VideoInfo,
@@ -48,6 +47,7 @@ pub enum NetworkCommand {
         req_id: u64,
         keyword: String,
         page: i32,
+        kind: SearchKind,
     },
     LoadDynamicInit {
         req_id: u64,
@@ -191,6 +191,14 @@ pub enum NetworkEvent {
         keyword: String,
         page: i32,
         results: Vec<SearchVideoItem>,
+        total: i32,
+    },
+    MediaSearchLoaded {
+        req_id: u64,
+        keyword: String,
+        kind: SearchKind,
+        page: i32,
+        results: Vec<MediaSearchItem>,
         total: i32,
     },
     DynamicLoaded {
@@ -482,15 +490,31 @@ async fn handle_command(api_client: Arc<ApiClient>, command: NetworkCommand) -> 
             req_id,
             keyword,
             page,
-        } => match api_client.search_videos(&keyword, page).await {
-            Ok(data) => NetworkEvent::SearchLoaded {
-                req_id,
-                keyword,
-                page,
-                results: data.result.unwrap_or_default(),
-                total: data.num_results.unwrap_or(0),
+            kind,
+        } => match kind {
+            SearchKind::Video => match api_client.search_videos(&keyword, page).await {
+                Ok(data) => NetworkEvent::SearchLoaded {
+                    req_id,
+                    keyword,
+                    page,
+                    results: data.result.unwrap_or_default(),
+                    total: data.num_results.unwrap_or(0),
+                },
+                Err(e) => failed(req_id, "search", e),
             },
-            Err(e) => failed(req_id, "search", e),
+            SearchKind::MediaBangumi | SearchKind::MediaFt => {
+                match api_client.search_media(&keyword, page, kind).await {
+                    Ok(data) => NetworkEvent::MediaSearchLoaded {
+                        req_id,
+                        keyword,
+                        kind,
+                        page,
+                        results: data.result.unwrap_or_default(),
+                        total: data.num_results.unwrap_or(0),
+                    },
+                    Err(e) => failed(req_id, "search", e),
+                }
+            }
         },
         NetworkCommand::LoadUpPage { req_id, mid, order } => {
             match api_client.get_space_info(mid).await {

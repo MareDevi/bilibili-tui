@@ -185,7 +185,7 @@ mod tests {
     use crate::application::{AppAction, BangumiTab};
     use crate::domain::playback::PlaybackEvent;
     use crate::presentation::tui::{
-        BangumiDetailPage, FavoritesPage, HomePage, NavItem, Page, VideoDetailPage,
+        BangumiDetailPage, FavoritesPage, HomePage, NavItem, Page, SearchPage, VideoDetailPage,
     };
 
     fn bangumi_season(season_id: i64, episode_aid: i64) -> crate::api::bangumi::SeasonResult {
@@ -1064,5 +1064,189 @@ mod tests {
         // The request is now in flight; a second Down near the bottom waits.
         app.handle_action(AppAction::LoadMoreBangumi).await;
         assert!(rx.try_recv().is_err());
+    }
+
+    fn video_search_fixture(bvid: &str, aid: i64) -> crate::api::search::SearchVideoItem {
+        serde_json::from_value(serde_json::json!({
+            "aid": aid,
+            "bvid": bvid,
+            "title": format!("video {bvid}"),
+            "author": "up",
+            "pic": "//i0.hdslb.com/video.jpg",
+            "play": 1,
+            "duration": "01:00",
+            "description": "",
+            "danmaku": 1,
+            "mid": 9
+        }))
+        .expect("video search fixture")
+    }
+
+    fn media_search_fixture(season_id: i64) -> crate::api::search::MediaSearchItem {
+        serde_json::from_value(serde_json::json!({
+            "season_id": season_id,
+            "title": format!("season-{season_id}"),
+            "cover": "//i0.hdslb.com/bangumi.jpg",
+            "areas": "日本",
+            "styles": "奇幻",
+            "season_type_name": "番剧",
+            "ep_size": 12,
+            "media_score": {"score": 9.1, "user_count": 100},
+            "is_follow": 0
+        }))
+        .expect("media search fixture")
+    }
+
+    fn search_page_with(query: &str, kind: crate::api::search::SearchKind) -> SearchPage {
+        let mut page = SearchPage::new();
+        page.disable_hotwords();
+        page.query = query.to_string();
+        page.input_mode = false;
+        page.set_search_kind(kind);
+        page
+    }
+
+    #[tokio::test]
+    async fn switch_search_kind_starts_page_one_media_search() {
+        let (mut app, rx) = minimal_app();
+        let mut page = search_page_with("gundam", crate::api::search::SearchKind::Video);
+        page.set_results(vec![video_search_fixture("BV1old", 1)], 1);
+        app.current_page = Page::Search(page);
+
+        app.handle_action(AppAction::SwitchSearchKind(
+            crate::api::search::SearchKind::MediaBangumi,
+        ))
+        .await;
+
+        match rx.try_recv() {
+            Ok(NetworkCommand::Search {
+                keyword,
+                page,
+                kind,
+                ..
+            }) => {
+                assert_eq!(keyword, "gundam");
+                assert_eq!(page, 1);
+                assert_eq!(kind, crate::api::search::SearchKind::MediaBangumi);
+            }
+            other => panic!("expected media search request, got {other:?}"),
+        }
+        match &app.current_page {
+            Page::Search(page) => {
+                assert_eq!(
+                    page.search_kind,
+                    crate::api::search::SearchKind::MediaBangumi
+                );
+                assert!(page.loading);
+                assert!(page.grid.cards.is_empty());
+                assert!(page.result_targets.is_empty());
+            }
+            _ => panic!("expected search page"),
+        }
+    }
+
+    #[tokio::test]
+    async fn media_search_events_require_latest_request_and_matching_kind() {
+        let (mut app, _rx) = minimal_app();
+        let page = search_page_with("gundam", crate::api::search::SearchKind::MediaBangumi);
+        app.current_page = Page::Search(page);
+        let stale = app.next_request_id("search");
+        let latest = app.next_request_id("search");
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        app.network_event_rx = event_rx;
+
+        // Right request, wrong kind.
+        event_tx
+            .send(NetworkEvent::MediaSearchLoaded {
+                req_id: latest,
+                keyword: "gundam".to_string(),
+                kind: crate::api::search::SearchKind::MediaFt,
+                page: 1,
+                results: vec![media_search_fixture(1)],
+                total: 1,
+            })
+            .expect("send wrong-kind media");
+        // Stale request, right kind.
+        event_tx
+            .send(NetworkEvent::MediaSearchLoaded {
+                req_id: stale,
+                keyword: "gundam".to_string(),
+                kind: crate::api::search::SearchKind::MediaBangumi,
+                page: 1,
+                results: vec![media_search_fixture(2)],
+                total: 1,
+            })
+            .expect("send stale media");
+        // Video payload while the bangumi tab is active.
+        event_tx
+            .send(NetworkEvent::SearchLoaded {
+                req_id: latest,
+                keyword: "gundam".to_string(),
+                page: 1,
+                results: vec![video_search_fixture("BV1mix", 3)],
+                total: 1,
+            })
+            .expect("send video payload");
+        app.drain_network_events();
+        match &app.current_page {
+            Page::Search(page) => {
+                assert!(page.grid.cards.is_empty());
+                assert!(page.result_targets.is_empty());
+            }
+            _ => panic!("expected search page"),
+        }
+
+        event_tx
+            .send(NetworkEvent::MediaSearchLoaded {
+                req_id: latest,
+                keyword: "gundam".to_string(),
+                kind: crate::api::search::SearchKind::MediaBangumi,
+                page: 1,
+                results: vec![media_search_fixture(44219)],
+                total: 1,
+            })
+            .expect("send latest media");
+        app.drain_network_events();
+        match &app.current_page {
+            Page::Search(page) => {
+                assert_eq!(page.grid.cards.len(), 1);
+                assert_eq!(page.total_results, 1);
+                assert!(!page.loading);
+                assert_eq!(page.result_targets.len(), 1);
+                assert_eq!(page.grid.cards.len(), 1);
+            }
+            _ => panic!("expected search page"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bangumi_detail_back_restores_search_state() {
+        let (mut app, _rx) = minimal_app();
+        let mut page = search_page_with("gundam", crate::api::search::SearchKind::MediaBangumi);
+        page.set_media_results(
+            crate::api::search::SearchKind::MediaBangumi,
+            vec![media_search_fixture(11), media_search_fixture(22)],
+            2,
+        );
+        page.grid.selected_index = 1;
+        app.current_page = Page::Search(page);
+
+        app.handle_action(AppAction::OpenBangumiDetail(22)).await;
+        assert!(matches!(app.current_page, Page::BangumiDetail(_)));
+        assert_eq!(app.navigation_stack.len(), 1);
+
+        app.handle_action(AppAction::BackToList).await;
+        match &app.current_page {
+            Page::Search(page) => {
+                assert_eq!(page.query, "gundam");
+                assert_eq!(
+                    page.search_kind,
+                    crate::api::search::SearchKind::MediaBangumi
+                );
+                assert_eq!(page.grid.selected_index, 1);
+                assert_eq!(page.result_targets.len(), 2);
+            }
+            _ => panic!("expected restored search page"),
+        }
     }
 }

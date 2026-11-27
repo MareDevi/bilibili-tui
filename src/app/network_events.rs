@@ -1,3 +1,4 @@
+use crate::api::search::SearchKind;
 use crate::app::App;
 use crate::application::{BangumiTab, network};
 use crate::presentation::tui::{Page, VideoCard};
@@ -58,7 +59,9 @@ impl App {
                 match &mut self.current_page {
                     Page::Home(home_page) => {
                         let search_page = home_page.search_mut();
-                        if search_page.query != keyword {
+                        if search_page.query != keyword
+                            || search_page.search_kind != SearchKind::Video
+                        {
                             return;
                         }
                         if page <= 1 {
@@ -71,7 +74,9 @@ impl App {
                         }
                     }
                     Page::Search(search_page) => {
-                        if search_page.query != keyword {
+                        if search_page.query != keyword
+                            || search_page.search_kind != SearchKind::Video
+                        {
                             return;
                         }
                         if page <= 1 {
@@ -81,6 +86,48 @@ impl App {
                             search_page.page = page;
                             search_page.total_results = total;
                             search_page.append_results(results);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            network::NetworkEvent::MediaSearchLoaded {
+                req_id,
+                keyword,
+                kind,
+                page,
+                results,
+                total,
+            } => {
+                if !self.is_latest_request("search", req_id) {
+                    return;
+                }
+                match &mut self.current_page {
+                    Page::Home(home_page) => {
+                        let search_page = home_page.search_mut();
+                        if search_page.query != keyword || search_page.search_kind != kind {
+                            return;
+                        }
+                        if page <= 1 {
+                            search_page.page = 1;
+                            search_page.set_media_results(kind, results, total);
+                        } else {
+                            search_page.page = page;
+                            search_page.total_results = total;
+                            search_page.append_media_results(results);
+                        }
+                    }
+                    Page::Search(search_page) => {
+                        if search_page.query != keyword || search_page.search_kind != kind {
+                            return;
+                        }
+                        if page <= 1 {
+                            search_page.page = 1;
+                            search_page.set_media_results(kind, results, total);
+                        } else {
+                            search_page.page = page;
+                            search_page.total_results = total;
+                            search_page.append_media_results(results);
                         }
                     }
                     _ => {}

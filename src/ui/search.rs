@@ -3,7 +3,7 @@
 use super::video_card::{VideoCard, VideoCardGrid};
 use super::{Component, Theme, shortcut_footer};
 use crate::api::client::ApiClient;
-use crate::api::search::{HotwordItem, SearchVideoItem};
+use crate::api::search::{HotwordItem, MediaSearchItem, SearchKind, SearchVideoItem};
 use crate::application::AppAction;
 use crate::storage::Keybindings;
 use ratatui::{
@@ -13,8 +13,31 @@ use ratatui::{
 };
 use std::time::Instant;
 
+/// What a search result card opens when confirmed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchResultTarget {
+    Video { bvid: String, aid: i64 },
+    Bangumi { season_id: i64 },
+}
+
+impl SearchResultTarget {
+    fn to_action(&self) -> AppAction {
+        match self {
+            Self::Video { bvid, aid } if !bvid.is_empty() && *aid > 0 => {
+                AppAction::OpenVideoDetail(bvid.clone(), *aid)
+            }
+            Self::Bangumi { season_id } if *season_id > 0 => {
+                AppAction::OpenBangumiDetail(*season_id)
+            }
+            _ => AppAction::None,
+        }
+    }
+}
+
 pub struct SearchPage {
     pub query: String,
+    pub search_kind: SearchKind,
+    pub result_targets: Vec<SearchResultTarget>,
     pub grid: VideoCardGrid,
     pub loading: bool,
     pub error_message: Option<String>,
@@ -24,18 +47,19 @@ pub struct SearchPage {
     pub hotword_loading: bool,
     pub show_hot_list: bool,
     hotwords_enabled: bool,
-    hot_selected: Option<usize>,
+    hot_selected: Option<u32>,
     pub page: i32,
     pub total_results: i32,
     pub loading_more: bool,
-    last_click_time: Option<Instant>,
-    last_click_index: Option<usize>,
+    last_click: Option<Instant>,
 }
 
 impl SearchPage {
     pub fn new() -> Self {
         Self {
             query: String::new(),
+            search_kind: SearchKind::Video,
+            result_targets: Vec::new(),
             grid: VideoCardGrid::new_list(),
             loading: false,
             error_message: None,
@@ -49,8 +73,7 @@ impl SearchPage {
             page: 1,
             total_results: 0,
             loading_more: false,
-            last_click_time: None,
-            last_click_index: None,
+            last_click: None,
         }
     }
 
@@ -64,20 +87,8 @@ impl SearchPage {
     }
 
     pub fn set_results(&mut self, results: Vec<SearchVideoItem>, total: i32) {
-        self.grid.clear();
-        for item in results {
-            let card = VideoCard::new(
-                item.bvid.clone(),
-                item.aid,
-                item.display_title(),
-                item.author_name().to_string(),
-                item.format_play(),
-                item.duration.clone().unwrap_or_default(),
-                item.cover_url(),
-            )
-            .with_uploader_mid(item.mid);
-            self.grid.add_card(card);
-        }
+        self.clear_results();
+        self.append_results(results);
         self.total_results = total;
         self.loading = false;
         self.input_mode = false;
@@ -98,8 +109,157 @@ impl SearchPage {
             )
             .with_uploader_mid(item.mid);
             self.grid.add_card(card);
+            self.result_targets.push(SearchResultTarget::Video {
+                bvid: item.bvid.unwrap_or_default(),
+                aid: item.aid.unwrap_or(0),
+            });
         }
         self.loading_more = false;
+    }
+
+    /// Replace the grid with bangumi / movie-TV results for `kind`.
+    pub fn set_media_results(
+        &mut self,
+        kind: SearchKind,
+        results: Vec<MediaSearchItem>,
+        total: i32,
+    ) {
+        self.search_kind = kind;
+        self.clear_results();
+        self.append_media_results(results);
+        self.total_results = total;
+        self.loading = false;
+        self.input_mode = false;
+        self.show_hot_list = false;
+        self.error_message = None;
+    }
+
+    pub fn append_media_results(&mut self, results: Vec<MediaSearchItem>) {
+        for item in results {
+            let Some(season_id) = item.resolved_season_id() else {
+                continue;
+            };
+            let card = VideoCard::new(
+                None,
+                None,
+                item.display_title(),
+                item.display_subtitle(),
+                item.score_text(),
+                item.meta_text(),
+                item.cover_url(),
+            );
+            self.grid.add_card(card);
+            self.result_targets
+                .push(SearchResultTarget::Bangumi { season_id });
+        }
+        self.loading_more = false;
+    }
+
+    /// Drop the current result grid and its targets.
+    pub fn clear_results(&mut self) {
+        self.grid.clear();
+        self.result_targets.clear();
+    }
+
+    pub fn set_search_kind(&mut self, kind: SearchKind) {
+        self.search_kind = kind;
+    }
+
+    /// Apply a kind switch; returns the keyword when a fresh search must run.
+    pub fn begin_kind_switch(&mut self, kind: SearchKind) -> Option<String> {
+        self.set_search_kind(kind);
+        self.page = 1;
+        self.error_message = None;
+        if self.query.trim().is_empty() || self.show_hot_list {
+            return None;
+        }
+        self.loading = true;
+        self.clear_results();
+        Some(self.query.clone())
+    }
+
+    /// Enter on the selected card opens the matching detail page.
+    fn selected_target_action(&self) -> AppAction {
+        match self.result_targets.get(self.grid.selected_index) {
+            Some(target) => target.to_action(),
+            None => AppAction::None,
+        }
+    }
+
+    fn open_target_at(&self, index: usize) -> Option<AppAction> {
+        self.result_targets
+            .get(index)
+            .map(SearchResultTarget::to_action)
+            .filter(|action| !matches!(action, AppAction::None))
+    }
+
+    fn empty_message(&self) -> &'static str {
+        if self.query.is_empty() {
+            return "输入关键词开始搜索";
+        }
+        match self.search_kind {
+            SearchKind::Video => "没有找到相关视频",
+            SearchKind::MediaBangumi => "没有找到相关番剧",
+            SearchKind::MediaFt => "没有找到相关影视",
+        }
+    }
+
+    /// Tab / section shortcuts switch the search kind outside text input mode.
+    fn kind_shortcut(&self, key: KeyCode, keys: &Keybindings) -> Option<AppAction> {
+        let kind = if keys.matches_tab_1(key) {
+            SearchKind::Video
+        } else if keys.matches_tab_2(key) {
+            SearchKind::MediaBangumi
+        } else if keys.matches_tab_3(key) {
+            SearchKind::MediaFt
+        } else if keys.matches_section_prev(key) {
+            self.search_kind.cycle(false)
+        } else if keys.matches_section_next(key) {
+            self.search_kind.cycle(true)
+        } else {
+            return None;
+        };
+        (kind != self.search_kind).then_some(AppAction::SwitchSearchKind(kind))
+    }
+
+    fn kind_bar_labels() -> Vec<(SearchKind, String)> {
+        SearchKind::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| (*kind, format!("[{}] {}", index + 1, kind.label())))
+            .collect()
+    }
+
+    fn kind_bar_ranges() -> Vec<(SearchKind, u16, u16)> {
+        let mut ranges = Vec::new();
+        let mut cursor = 1u16;
+        for (index, (kind, text)) in Self::kind_bar_labels().into_iter().enumerate() {
+            if index > 0 {
+                cursor += 3;
+            }
+            let start = cursor;
+            cursor += Span::raw(text).width() as u16;
+            ranges.push((kind, start, cursor));
+        }
+        ranges
+    }
+
+    fn render_kind_bar(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let mut spans = vec![Span::raw(" ")];
+        for (index, (kind, text)) in Self::kind_bar_labels().into_iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::raw("   "));
+            }
+            let style = if kind == self.search_kind {
+                Style::default()
+                    .fg(theme.bilibili_pink)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg_secondary)
+            };
+            spans.push(Span::styled(text, style));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
     pub fn set_error(&mut self, msg: String) {
@@ -167,15 +327,19 @@ impl SearchPage {
         self.grid.start_cover_downloads();
     }
 
+    fn hot_selected_index(&self) -> usize {
+        self.hot_selected.unwrap_or(0) as usize
+    }
+
     fn select_hotword(&mut self, idx: usize) {
         if idx < self.hotwords.len() {
-            self.hot_selected = Some(idx);
+            self.hot_selected = Some(idx as u32);
         }
     }
 
     fn search_selected_hotword(&mut self) -> Option<AppAction> {
         if let Some(idx) = self.hot_selected
-            && let Some(item) = self.hotwords.get(idx)
+            && let Some(item) = self.hotwords.get(idx as usize)
             && let Some(keyword) = item.keyword_text()
         {
             self.query = keyword.clone();
@@ -253,7 +417,8 @@ impl SearchPage {
             .highlight_style(Style::default().fg(theme.bilibili_pink))
             .highlight_symbol("▶ ");
 
-        let mut state = ListState::default().with_selected(self.hot_selected);
+        let mut state =
+            ListState::default().with_selected(self.hot_selected.map(|idx| idx as usize));
         frame.render_stateful_widget(list, area, &mut state);
     }
 }
@@ -270,6 +435,7 @@ impl Component for SearchPage {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // Search input
+                Constraint::Length(1), // Search kind switcher
                 Constraint::Min(10),   // Results grid
                 Constraint::Length(2), // Help
             ])
@@ -291,7 +457,7 @@ impl Component for SearchPage {
                 Style::default().fg(theme.border_subtle)
             })
             .title(Span::styled(
-                " 🔍 搜索视频 ",
+                format!(" 🔍 搜索{} ", self.search_kind.label()),
                 Style::default().fg(theme.bilibili_pink),
             ));
 
@@ -301,9 +467,12 @@ impl Component for SearchPage {
             .block(input_block);
         frame.render_widget(input, chunks[0]);
 
+        // Search kind switcher
+        self.render_kind_bar(frame, chunks[1], theme);
+
         // Results
         if self.show_hot_list {
-            self.draw_hot_list(frame, chunks[1], theme);
+            self.draw_hot_list(frame, chunks[2], theme);
         } else if self.loading {
             let loading = Paragraph::new("⏳ 搜索中...")
                 .style(Style::default().fg(theme.warning))
@@ -318,7 +487,7 @@ impl Component for SearchPage {
                             Style::default().fg(theme.fg_secondary),
                         )),
                 );
-            frame.render_widget(loading, chunks[1]);
+            frame.render_widget(loading, chunks[2]);
         } else if let Some(error) = &self.error_message {
             let error_widget = Paragraph::new(format!("❌ {}", error))
                 .style(Style::default().fg(theme.error))
@@ -329,22 +498,18 @@ impl Component for SearchPage {
                         .border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(theme.border_unfocused)),
                 );
-            frame.render_widget(error_widget, chunks[1]);
+            frame.render_widget(error_widget, chunks[2]);
         } else if self.grid.cards.is_empty() {
-            let empty = Paragraph::new(if self.query.is_empty() {
-                "输入关键词开始搜索"
-            } else {
-                "没有找到相关视频"
-            })
-            .style(Style::default().fg(theme.fg_secondary))
-            .alignment(Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme.border_unfocused)),
-            );
-            frame.render_widget(empty, chunks[1]);
+            let empty = Paragraph::new(self.empty_message())
+                .style(Style::default().fg(theme.fg_secondary))
+                .alignment(Alignment::Center)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(theme.border_unfocused)),
+                );
+            frame.render_widget(empty, chunks[2]);
         } else {
             // Render with header
             let header = Paragraph::new(Line::from(vec![
@@ -368,12 +533,12 @@ impl Component for SearchPage {
 
             let header_area = Rect {
                 height: 2,
-                ..chunks[1]
+                ..chunks[2]
             };
             let grid_area = Rect {
-                y: chunks[1].y + 2,
-                height: chunks[1].height.saturating_sub(2),
-                ..chunks[1]
+                y: chunks[2].y + 2,
+                height: chunks[2].height.saturating_sub(2),
+                ..chunks[2]
             };
 
             frame.render_widget(header, header_area);
@@ -410,12 +575,17 @@ impl Component for SearchPage {
                     ),
                     (keys.confirm.clone(), "详情".into(), theme.success),
                     (keys.search_focus.clone(), "搜索".into(), theme.info),
+                    (
+                        format!("{}/{}", keys.tab_1, keys.section_next),
+                        "分类".into(),
+                        theme.info,
+                    ),
                     (keys.nav_next_page.clone(), "切换".into(), theme.info),
                 ],
             )
         };
         let help = Paragraph::new(help).alignment(Alignment::Center);
-        frame.render_widget(help, chunks[2]);
+        frame.render_widget(help, chunks[3]);
     }
 
     fn handle_input(
@@ -444,18 +614,18 @@ impl Component for SearchPage {
                 KeyCode::Up => {
                     if self.show_hot_list && !self.hotwords.is_empty() {
                         let len = self.hotwords.len();
-                        let current = self.hot_selected.unwrap_or(0);
+                        let current = self.hot_selected_index();
                         let next = if current == 0 { len - 1 } else { current - 1 };
-                        self.hot_selected = Some(next);
+                        self.hot_selected = Some(next as u32);
                     }
                     Some(AppAction::None)
                 }
                 KeyCode::Down => {
                     if self.show_hot_list && !self.hotwords.is_empty() {
                         let len = self.hotwords.len();
-                        let current = self.hot_selected.unwrap_or(0);
+                        let current = self.hot_selected_index();
                         let next = (current + 1) % len;
-                        self.hot_selected = Some(next);
+                        self.hot_selected = Some(next as u32);
                     }
                     Some(AppAction::None)
                 }
@@ -480,21 +650,24 @@ impl Component for SearchPage {
                 _ => Some(AppAction::None),
             }
         } else if self.show_hot_list {
+            if let Some(action) = self.kind_shortcut(key, keys) {
+                return Some(action);
+            }
             if keys.matches_up(key) {
                 if !self.hotwords.is_empty() {
                     let len = self.hotwords.len();
-                    let current = self.hot_selected.unwrap_or(0);
+                    let current = self.hot_selected_index();
                     let next = if current == 0 { len - 1 } else { current - 1 };
-                    self.hot_selected = Some(next);
+                    self.hot_selected = Some(next as u32);
                 }
                 return Some(AppAction::None);
             }
             if keys.matches_down(key) {
                 if !self.hotwords.is_empty() {
                     let len = self.hotwords.len();
-                    let current = self.hot_selected.unwrap_or(0);
+                    let current = self.hot_selected_index();
                     let next = (current + 1) % len;
-                    self.hot_selected = Some(next);
+                    self.hot_selected = Some(next as u32);
                 }
                 return Some(AppAction::None);
             }
@@ -517,6 +690,9 @@ impl Component for SearchPage {
             }
             Some(AppAction::None)
         } else {
+            if let Some(action) = self.kind_shortcut(key, keys) {
+                return Some(action);
+            }
             if keys.matches_page_down(key) {
                 self.grid.move_page_down();
                 if self.grid.is_near_bottom(self.grid.cached_visible_rows) && !self.loading_more {
@@ -554,12 +730,7 @@ impl Component for SearchPage {
                 return Some(AppAction::OpenUpPage(mid));
             }
             if keys.matches_confirm(key) {
-                if let Some(card) = self.grid.selected_card()
-                    && let (Some(bvid), Some(aid)) = (&card.bvid, card.aid)
-                {
-                    return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
-                }
-                return Some(AppAction::None);
+                return Some(self.selected_target_action());
             }
             if keys.matches_search_focus(key) {
                 self.input_mode = true;
@@ -588,18 +759,35 @@ impl Component for SearchPage {
             return None;
         }
 
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(1),
+                Constraint::Min(10),
+                Constraint::Length(2),
+            ])
+            .split(area);
+
+        // Search kind switcher: click a tab to switch category.
+        let kind_area = chunks[1];
+        if event.kind == MouseEventKind::Down(MouseButton::Left)
+            && kind_area.contains(ratatui::layout::Position::new(event.column, event.row))
+        {
+            let offset = event.column.saturating_sub(kind_area.x);
+            if let Some((kind, _, _)) = Self::kind_bar_ranges()
+                .iter()
+                .find(|(_, start, end)| offset >= *start && offset < *end)
+                && *kind != self.search_kind
+            {
+                return Some(AppAction::SwitchSearchKind(*kind));
+            }
+            return Some(AppAction::None);
+        }
+
         // Handle hot list mouse interactions
         if self.show_hot_list {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3),
-                    Constraint::Min(10),
-                    Constraint::Length(2),
-                ])
-                .split(area);
-
-            let list_area = chunks[1];
+            let list_area = chunks[2];
 
             if !list_area.contains(ratatui::layout::Position::new(event.column, event.row)) {
                 return None;
@@ -619,27 +807,23 @@ impl Component for SearchPage {
                 MouseEventKind::ScrollDown => {
                     if !self.hotwords.is_empty() {
                         let len = self.hotwords.len();
-                        let current = self.hot_selected.unwrap_or(0);
+                        let current = self.hot_selected_index();
                         let next = (current + 1) % len;
-                        self.hot_selected = Some(next);
+                        self.hot_selected = Some(next as u32);
                     }
                     Some(AppAction::None)
                 }
                 MouseEventKind::ScrollUp => {
                     if !self.hotwords.is_empty() {
                         let len = self.hotwords.len();
-                        let current = self.hot_selected.unwrap_or(0);
+                        let current = self.hot_selected_index();
                         let next = if current == 0 { len - 1 } else { current - 1 };
-                        self.hot_selected = Some(next);
+                        self.hot_selected = Some(next as u32);
                     }
                     Some(AppAction::None)
                 }
                 _ => None,
             };
-        }
-
-        if self.show_hot_list {
-            return None;
         }
 
         match event.kind {
@@ -657,21 +841,12 @@ impl Component for SearchPage {
                 None
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(3),
-                        Constraint::Min(10),
-                        Constraint::Length(2),
-                    ])
-                    .split(area);
-
                 let header_height = 2u16;
                 let grid_area = Rect {
-                    y: chunks[1].y + header_height,
-                    height: chunks[1].height.saturating_sub(header_height),
-                    x: chunks[1].x,
-                    width: chunks[1].width,
+                    y: chunks[2].y + header_height,
+                    height: chunks[2].height.saturating_sub(header_height),
+                    x: chunks[2].x,
+                    width: chunks[2].width,
                 };
 
                 if !grid_area.contains(ratatui::layout::Position::new(event.column, event.row)) {
@@ -689,24 +864,18 @@ impl Component for SearchPage {
 
                 if click_idx < self.grid.cards.len() {
                     let now = Instant::now();
-                    let is_double_click = self.last_click_index == Some(click_idx)
+                    let is_double_click = self.grid.selected_index == click_idx
                         && self
-                            .last_click_time
+                            .last_click
                             .is_some_and(|t| now.duration_since(t).as_millis() < 500);
 
                     if is_double_click {
-                        self.last_click_time = None;
-                        self.last_click_index = None;
-                        if let Some(card) = self.grid.cards.get(click_idx)
-                            && let (Some(bvid), Some(aid)) = (&card.bvid, card.aid)
-                        {
-                            return Some(AppAction::OpenVideoDetail(bvid.clone(), aid));
-                        }
+                        self.last_click = None;
+                        return self.open_target_at(click_idx);
                     } else {
                         self.grid.selected_index = click_idx;
                         self.grid.update_scroll(self.grid.cached_visible_rows);
-                        self.last_click_time = Some(now);
-                        self.last_click_index = Some(click_idx);
+                        self.last_click = Some(now);
                     }
                 }
                 None
@@ -734,5 +903,226 @@ mod minimal_mode_tests {
             page.handle_input(key, &keys);
             assert!(!page.show_hot_list);
         }
+    }
+}
+
+#[cfg(test)]
+mod search_kind_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::KeyModifiers;
+
+    fn keys() -> Keybindings {
+        Keybindings::default()
+    }
+
+    fn video_item(bvid: &str, aid: i64) -> SearchVideoItem {
+        serde_json::from_value(serde_json::json!({
+            "aid": aid,
+            "bvid": bvid,
+            "title": "video <em class=\"keyword\">rust</em>",
+            "author": "up",
+            "pic": "//i0.hdslb.com/video.jpg",
+            "play": 1000,
+            "duration": "10:00",
+            "description": "",
+            "danmaku": 1,
+            "mid": 9
+        }))
+        .expect("video fixture")
+    }
+
+    fn media_item(season_id: i64) -> MediaSearchItem {
+        serde_json::from_value(serde_json::json!({
+            "season_id": season_id,
+            "title": "测试<em class=\"keyword\">番剧</em>",
+            "cover": "//i0.hdslb.com/bangumi.jpg",
+            "areas": "日本",
+            "styles": "热血",
+            "season_type_name": "番剧",
+            "ep_size": 12,
+            "media_score": {"score": 9.6, "user_count": 10},
+            "is_follow": 0
+        }))
+        .expect("media fixture")
+    }
+
+    fn press(page: &mut SearchPage, key: KeyCode, keys: &Keybindings) -> Option<AppAction> {
+        let action = page.handle_input(key, keys);
+        if let Some(AppAction::SwitchSearchKind(kind)) = action {
+            page.set_search_kind(kind);
+        }
+        action
+    }
+
+    fn render(page: &mut SearchPage) -> String {
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(100, 40)).unwrap();
+        terminal
+            .draw(|frame| {
+                page.draw(
+                    frame,
+                    frame.area(),
+                    &Theme::default(),
+                    &Keybindings::default(),
+                )
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect()
+    }
+
+    #[test]
+    fn digits_type_in_input_mode_instead_of_switching_kind() {
+        let mut page = SearchPage::new();
+        let keys = keys();
+        assert!(page.input_mode);
+        for character in ['2', '3', '[', ']'] {
+            page.handle_input(KeyCode::Char(character), &keys);
+        }
+        assert_eq!(page.query, "23[]");
+        assert_eq!(page.search_kind, SearchKind::Video);
+        assert!(matches!(
+            page.handle_input(KeyCode::Char('1'), &keys),
+            Some(AppAction::None)
+        ));
+        assert_eq!(page.query, "23[]1");
+    }
+
+    #[test]
+    fn tab_and_section_keys_switch_kind_outside_input_mode() {
+        let mut page = SearchPage::new();
+        page.input_mode = false;
+        let keys = keys();
+
+        assert!(matches!(
+            press(&mut page, KeyCode::Char('2'), &keys),
+            Some(AppAction::SwitchSearchKind(SearchKind::MediaBangumi))
+        ));
+        assert!(matches!(
+            press(&mut page, KeyCode::Char('3'), &keys),
+            Some(AppAction::SwitchSearchKind(SearchKind::MediaFt))
+        ));
+        assert!(matches!(
+            press(&mut page, KeyCode::Char('1'), &keys),
+            Some(AppAction::SwitchSearchKind(SearchKind::Video))
+        ));
+
+        page.set_search_kind(SearchKind::MediaFt);
+        assert!(matches!(
+            press(&mut page, KeyCode::Char(']'), &keys),
+            Some(AppAction::SwitchSearchKind(SearchKind::Video))
+        ));
+        assert!(matches!(
+            press(&mut page, KeyCode::Char('['), &keys),
+            Some(AppAction::SwitchSearchKind(SearchKind::MediaFt))
+        ));
+        // Already-active kind: not treated as a switch.
+        page.set_search_kind(SearchKind::Video);
+        assert!(matches!(
+            press(&mut page, KeyCode::Char('1'), &keys),
+            Some(AppAction::None)
+        ));
+    }
+
+    #[test]
+    fn clicking_the_kind_bar_switches_kind() {
+        let mut page = SearchPage::new();
+        page.show_hot_list = false;
+        page.input_mode = false;
+        render(&mut page);
+        let (_, start, end) = SearchPage::kind_bar_ranges()
+            .iter()
+            .find(|(kind, _, _)| *kind == SearchKind::MediaBangumi)
+            .copied()
+            .expect("bangumi tab range");
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: (start + end) / 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(matches!(
+            page.handle_mouse(event, Rect::new(0, 0, 100, 30)),
+            Some(AppAction::SwitchSearchKind(SearchKind::MediaBangumi))
+        ));
+    }
+
+    #[test]
+    fn bangumi_results_render_cards_and_open_detail() {
+        let mut page = SearchPage::new();
+        page.disable_hotwords();
+        page.input_mode = false;
+        page.set_media_results(SearchKind::MediaBangumi, vec![media_item(44219)], 1);
+        assert_eq!(page.search_kind, SearchKind::MediaBangumi);
+        assert_eq!(
+            page.result_targets,
+            vec![SearchResultTarget::Bangumi { season_id: 44219 }]
+        );
+
+        let text = render(&mut page);
+        assert!(text.contains("测试番剧"), "rendered: {text}");
+        assert!(!text.contains("<em"), "rendered: {text}");
+        assert!(text.contains("[1]视频"), "rendered: {text}");
+        assert!(text.contains("[2]番剧"), "rendered: {text}");
+        assert!(text.contains("[3]影视"), "rendered: {text}");
+
+        assert!(matches!(
+            page.handle_input(KeyCode::Enter, &keys()),
+            Some(AppAction::OpenBangumiDetail(44219))
+        ));
+        // Bangumi cards have no uploader, so `u` must not open an UP page.
+        assert!(!matches!(
+            page.handle_input(KeyCode::Char('u'), &keys()),
+            Some(AppAction::OpenUpPage(_))
+        ));
+    }
+
+    #[test]
+    fn media_ft_results_use_ft_empty_message_and_targets() {
+        let mut page = SearchPage::new();
+        page.disable_hotwords();
+        page.input_mode = false;
+        page.query = "movie".to_string();
+        page.set_media_results(SearchKind::MediaFt, vec![media_item(7)], 1);
+        assert_eq!(
+            page.result_targets,
+            vec![SearchResultTarget::Bangumi { season_id: 7 }]
+        );
+        let mut empty = SearchPage::new();
+        empty.disable_hotwords();
+        empty.input_mode = false;
+        empty.query = "nothing".to_string();
+        empty.set_search_kind(SearchKind::MediaFt);
+        let text = render(&mut empty);
+        assert!(text.contains("没有找到相关影视"), "rendered: {text}");
+    }
+
+    #[test]
+    fn video_results_still_open_video_detail() {
+        let mut page = SearchPage::new();
+        page.disable_hotwords();
+        page.input_mode = false;
+        page.set_results(vec![video_item("BV1test", 123)], 1);
+        assert_eq!(page.grid.cards.len(), 1);
+        assert_eq!(
+            page.result_targets,
+            vec![SearchResultTarget::Video {
+                bvid: "BV1test".to_string(),
+                aid: 123
+            }]
+        );
+        assert_eq!(page.grid.cards[0].title, "video rust");
+        assert!(matches!(
+            page.handle_input(KeyCode::Enter, &keys()),
+            Some(AppAction::OpenVideoDetail(bvid, 123)) if bvid == "BV1test"
+        ));
     }
 }
