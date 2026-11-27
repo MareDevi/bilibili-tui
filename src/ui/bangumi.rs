@@ -27,13 +27,16 @@ use ratatui::{
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-const TAB_TITLE: &str = " 🎬 番剧 ";
+const PAGE_TITLE: &str = " 番剧  ";
+const SOURCE_TITLE: &str = " 番剧 ";
+const SOURCE_COUNT: usize = 3;
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 const TIMELINE_PAGE_STEP: usize = 5;
 
 /// Which part of the page owns keyboard input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BangumiFocus {
+    Sources,
     Filter,
     List,
 }
@@ -270,8 +273,38 @@ fn weekday_label(day_of_week: i32) -> &'static str {
     }
 }
 
-/// Vertical split shared by drawing and mouse hit-testing.
+fn tab_index(tab: BangumiTab) -> usize {
+    match tab {
+        BangumiTab::Rank => 0,
+        BangumiTab::Timeline => 1,
+        BangumiTab::Index => 2,
+    }
+}
+
+fn source_tab(index: usize) -> BangumiTab {
+    match index {
+        1 => BangumiTab::Timeline,
+        2 => BangumiTab::Index,
+        _ => BangumiTab::Rank,
+    }
+}
+
+fn tab_label(tab: BangumiTab) -> &'static str {
+    match tab {
+        BangumiTab::Rank => "番剧排行",
+        BangumiTab::Timeline => "新番时间线",
+        BangumiTab::Index => "番剧索引",
+    }
+}
+
+fn source_label(index: usize) -> &'static str {
+    tab_label(source_tab(index))
+}
+
+/// Horizontal split shared by drawing and mouse hit-testing.
 struct PageLayout {
+    sources: Rect,
+    main: Rect,
     header: Rect,
     filters: Rect,
     content: Rect,
@@ -280,16 +313,22 @@ struct PageLayout {
 
 impl PageLayout {
     fn new(area: Rect) -> Self {
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(28), Constraint::Min(30)])
+            .split(area);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
                 Constraint::Length(3),
-                Constraint::Min(0),
+                Constraint::Length(3),
+                Constraint::Min(10),
                 Constraint::Length(2),
             ])
-            .split(area);
+            .split(panes[1]);
         Self {
+            sources: panes[0],
+            main: panes[1],
             header: chunks[0],
             filters: chunks[1],
             content: chunks[2],
@@ -301,6 +340,8 @@ impl PageLayout {
 pub struct BangumiPage {
     pub tab: BangumiTab,
     pub focus: BangumiFocus,
+    /// Left-pane view cursor, kept in sync with `tab`.
+    pub selected_source: usize,
     pub filter_cursor: usize,
     /// Rank tab state.
     pub rank_grid: VideoCardGrid,
@@ -334,8 +375,6 @@ pub struct BangumiPage {
     pub index_error: Option<String>,
     /// Non-destructive notice, e.g. a failed load-more request.
     pub index_notice: Option<String>,
-    /// Tab strip hit columns, recorded while drawing.
-    tab_hit_ranges: Vec<(BangumiTab, u16, u16)>,
     /// Filter chip hit columns, recorded while drawing.
     filter_hit_ranges: Vec<(usize, u16, u16)>,
     /// Timeline line -> flat episode index mapping from the last draw.
@@ -351,9 +390,10 @@ impl BangumiPage {
     pub fn new() -> Self {
         Self {
             tab: BangumiTab::Rank,
-            focus: BangumiFocus::List,
+            focus: BangumiFocus::Sources,
+            selected_source: 0,
             filter_cursor: 0,
-            rank_grid: VideoCardGrid::new(),
+            rank_grid: VideoCardGrid::new_list(),
             rank_season_ids: Vec::new(),
             rank_day: BangumiRankDay::default(),
             rank_season_type: BangumiSeasonType::default(),
@@ -368,7 +408,7 @@ impl BangumiPage {
             timeline_loaded: false,
             timeline_loading: false,
             timeline_error: None,
-            index_grid: VideoCardGrid::new(),
+            index_grid: VideoCardGrid::new_list(),
             index_season_ids: Vec::new(),
             index_seen_ids: HashSet::new(),
             season_index_query: SeasonIndexQuery::default(),
@@ -380,7 +420,6 @@ impl BangumiPage {
             index_loading_more: false,
             index_error: None,
             index_notice: None,
-            tab_hit_ranges: Vec::new(),
             filter_hit_ranges: Vec::new(),
             timeline_line_map: Vec::new(),
             timeline_scroll: 0,
@@ -391,12 +430,14 @@ impl BangumiPage {
     }
 
     pub fn set_tab(&mut self, tab: BangumiTab) {
+        self.selected_source = tab_index(tab);
         if self.tab != tab {
             self.tab = tab;
             self.focus = BangumiFocus::List;
             self.filter_cursor = 0;
             self.last_click_index = None;
             self.last_click_tab = None;
+            self.last_click_time = None;
         }
     }
 
@@ -693,15 +734,15 @@ impl BangumiPage {
         }
     }
 
-    fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
-            BangumiFocus::Filter => BangumiFocus::List,
-            BangumiFocus::List => BangumiFocus::Filter,
-        };
-        if self.focus == BangumiFocus::Filter {
-            self.filter_cursor = self
-                .filter_cursor
-                .min(self.filter_count().saturating_sub(1));
+    fn toggle_filter_focus(&mut self) {
+        match self.focus {
+            BangumiFocus::Filter => self.focus = BangumiFocus::List,
+            _ => {
+                self.focus = BangumiFocus::Filter;
+                self.filter_cursor = self
+                    .filter_cursor
+                    .min(self.filter_count().saturating_sub(1));
+            }
         }
     }
 
@@ -922,10 +963,9 @@ impl BangumiPage {
             BangumiTab::Index => {
                 let loaded = self.index_season_ids.len();
                 let mut text = format!(
-                    "{} · {} · {} · 已加载 {}",
+                    "{} · {} · 已加载 {}",
                     self.season_index_query.season_type.label(),
                     self.season_index_query.order.label(),
-                    self.index_filter_value(IndexFilterField::Sort),
                     loaded
                 );
                 if self.index_total > 0 {
@@ -950,43 +990,54 @@ impl BangumiPage {
         (text, style)
     }
 
-    fn render_header(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
-        let mut spans = vec![Span::styled(
-            TAB_TITLE,
-            Style::default()
-                .fg(theme.fg_accent)
-                .add_modifier(Modifier::BOLD),
-        )];
-        let mut ranges = Vec::new();
-        let mut cursor = spans[0].width() as u16;
-        for (tab, shortcut, label) in [
-            (BangumiTab::Rank, keys.tab_1.clone(), "排行"),
-            (BangumiTab::Timeline, keys.tab_2.clone(), "时间线"),
-            (BangumiTab::Index, keys.tab_3.clone(), "索引"),
-        ] {
-            let style = if tab == self.tab {
+    fn draw_sources(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let items = (0..SOURCE_COUNT)
+            .map(|index| {
+                ListItem::new(source_label(index)).style(if index == self.selected_source {
+                    Style::default()
+                        .fg(if self.focus == BangumiFocus::Sources {
+                            theme.bilibili_pink
+                        } else {
+                            theme.bilibili_cyan
+                        })
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.fg_secondary)
+                })
+            })
+            .collect::<Vec<_>>();
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme.border_subtle))
+                    .title(SOURCE_TITLE),
+            )
+            .highlight_symbol("▶ ");
+        let mut state = ListState::default().with_selected(Some(self.selected_source));
+        frame.render_stateful_widget(list, area, &mut state);
+    }
+
+    fn render_header(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let (meta, meta_style) = self.meta(theme);
+        let header = Paragraph::new(Line::from(vec![
+            Span::styled(PAGE_TITLE, Style::default().fg(theme.fg_accent)),
+            Span::styled(
+                tab_label(self.tab),
                 Style::default()
                     .fg(theme.bilibili_pink)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.fg_muted)
-            };
-            let span = Span::styled(format!("[{shortcut}] {label} "), style);
-            let start = cursor;
-            cursor += span.width() as u16;
-            spans.push(span);
-            ranges.push((tab, start, cursor));
-            spans.push(Span::raw(" "));
-            cursor += 1;
-        }
-        self.tab_hit_ranges = ranges;
-
-        let (meta, meta_style) = self.meta(theme);
-        let paragraph = Paragraph::new(vec![
-            Line::from(spans),
-            Line::from(Span::styled(meta, meta_style)),
-        ]);
-        frame.render_widget(paragraph, area);
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  ·  ", Style::default().fg(theme.fg_muted)),
+            Span::styled(meta, meta_style),
+        ]))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        );
+        frame.render_widget(header, area);
     }
 
     fn render_filter_bar(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
@@ -1016,6 +1067,7 @@ impl BangumiPage {
         self.filter_hit_ranges = ranges;
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(if filters_focused {
                 theme.border_focused
             } else {
@@ -1025,14 +1077,30 @@ impl BangumiPage {
     }
 
     fn render_placeholder(&self, frame: &mut Frame, area: Rect, theme: &Theme, text: &str) {
-        let paragraph = Paragraph::new(text.to_string())
-            .alignment(Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_subtle)),
-            );
-        frame.render_widget(paragraph, area);
+        frame.render_widget(
+            Paragraph::new(text.to_string())
+                .style(Style::default().fg(theme.fg_secondary))
+                .alignment(Alignment::Center),
+            area,
+        );
+    }
+
+    fn render_error_placeholder(&self, frame: &mut Frame, area: Rect, theme: &Theme, text: &str) {
+        frame.render_widget(
+            Paragraph::new(text.to_string())
+                .style(Style::default().fg(theme.error))
+                .alignment(Alignment::Center),
+            area,
+        );
+    }
+
+    fn render_loading_placeholder(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        frame.render_widget(
+            Paragraph::new("⏳ 加载中…")
+                .style(Style::default().fg(theme.warning))
+                .alignment(Alignment::Center),
+            area,
+        );
     }
 
     fn render_content(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
@@ -1062,9 +1130,9 @@ impl BangumiPage {
 
         if !loaded {
             if loading {
-                self.render_placeholder(frame, area, theme, "⏳ 加载中...");
+                self.render_loading_placeholder(frame, area, theme);
             } else if let Some(error) = error {
-                self.render_placeholder(frame, area, theme, &format!("❌ {error}"));
+                self.render_error_placeholder(frame, area, theme, &format!("❌ {error}"));
             } else {
                 self.render_placeholder(frame, area, theme, "按刷新键加载数据");
             }
@@ -1176,64 +1244,107 @@ impl BangumiPage {
         let paragraph = Paragraph::new(lines).scroll((offset, 0)).block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.border_subtle)),
         );
         frame.render_widget(paragraph, area);
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
-        let line = if self.focus == BangumiFocus::Filter {
-            shortcut_footer(
-                theme,
-                [
-                    (
-                        format!("{}/{}", keys.nav_left, keys.nav_right),
-                        "选项".to_string(),
-                        theme.fg_secondary,
-                    ),
-                    (
-                        format!("{}/{}", keys.nav_up, keys.confirm),
-                        "切换值".to_string(),
-                        theme.success,
-                    ),
-                    (
-                        format!("{}/{}", keys.section_prev, keys.section_next),
-                        "返回列表".to_string(),
-                        theme.info,
-                    ),
-                ],
-            )
-        } else {
-            let mut items = vec![
+        let items = match self.focus {
+            BangumiFocus::Sources => vec![
+                (
+                    format!("{}/{}", keys.nav_up, keys.nav_down),
+                    "切换视图".to_string(),
+                    theme.fg_secondary,
+                ),
+                (
+                    format!("{}/{}", keys.nav_right, keys.confirm),
+                    "进入".to_string(),
+                    theme.success,
+                ),
+                (
+                    format!("{}/{}/{}", keys.tab_1, keys.tab_2, keys.tab_3),
+                    "直达".to_string(),
+                    theme.fg_secondary,
+                ),
+                (keys.refresh.clone(), "刷新".to_string(), theme.info),
+            ],
+            BangumiFocus::Filter => vec![
+                (
+                    format!("{}/{}", keys.nav_left, keys.nav_right),
+                    "选项".to_string(),
+                    theme.fg_secondary,
+                ),
+                (
+                    format!("{}/{}", keys.nav_up, keys.confirm),
+                    "切换值".to_string(),
+                    theme.success,
+                ),
+                (
+                    format!("{}/{}", keys.section_prev, keys.section_next),
+                    "返回列表".to_string(),
+                    theme.info,
+                ),
+            ],
+            BangumiFocus::List => vec![
                 (
                     format!("{}/{}", keys.nav_up, keys.nav_down),
                     "浏览".to_string(),
                     theme.fg_secondary,
                 ),
-                (keys.confirm.clone(), "打开".to_string(), theme.success),
-                (keys.refresh.clone(), "刷新".to_string(), theme.info),
                 (
-                    format!("{}/{}/{}", keys.tab_1, keys.tab_2, keys.tab_3),
-                    "切换".to_string(),
+                    format!("{}/{}", keys.page_up, keys.page_down),
+                    "翻页".to_string(),
                     theme.fg_secondary,
                 ),
+                (
+                    keys.nav_left.clone(),
+                    "切换面板".to_string(),
+                    theme.fg_secondary,
+                ),
+                (keys.confirm.clone(), "打开".to_string(), theme.success),
                 (
                     format!("{}/{}", keys.section_prev, keys.section_next),
                     "筛选".to_string(),
                     theme.bilibili_cyan,
                 ),
-            ];
-            if self.tab == BangumiTab::Index {
-                items.push((keys.page_down.clone(), "更多".to_string(), theme.warning));
-            }
-            shortcut_footer(theme, items)
+                (keys.refresh.clone(), "刷新".to_string(), theme.info),
+            ],
         };
-        frame.render_widget(Paragraph::new(line).alignment(Alignment::Center), area);
+        frame.render_widget(
+            Paragraph::new(shortcut_footer(theme, items)).alignment(Alignment::Center),
+            area,
+        );
+    }
+
+    fn handle_sources_input(&mut self, key: KeyCode, keys: &Keybindings) -> Option<AppAction> {
+        if keys.matches_down(key) {
+            self.selected_source = (self.selected_source + 1) % SOURCE_COUNT;
+        } else if keys.matches_up(key) {
+            self.selected_source = if self.selected_source == 0 {
+                SOURCE_COUNT - 1
+            } else {
+                self.selected_source - 1
+            };
+        } else if keys.matches_right(key) || keys.matches_confirm(key) {
+            let target = source_tab(self.selected_source);
+            self.focus = BangumiFocus::List;
+            if target != self.tab {
+                return Some(AppAction::SwitchBangumiTab(target));
+            }
+        }
+        Some(AppAction::None)
     }
 
     fn handle_filter_input(&mut self, key: KeyCode, keys: &Keybindings) -> Option<AppAction> {
         if keys.matches_left(key) {
-            self.filter_cursor = self.filter_cursor.saturating_sub(1);
+            if self.filter_cursor == 0 {
+                self.selected_source = tab_index(self.tab);
+                self.focus = BangumiFocus::Sources;
+            } else {
+                self.filter_cursor -= 1;
+            }
             return Some(AppAction::None);
         }
         if keys.matches_right(key) {
@@ -1241,7 +1352,7 @@ impl BangumiPage {
             self.filter_cursor = self.filter_cursor.saturating_add(1).min(max);
             return Some(AppAction::None);
         }
-        if keys.matches_down(key) {
+        if keys.matches_down(key) || key == KeyCode::Esc {
             self.focus = BangumiFocus::List;
             return Some(AppAction::None);
         }
@@ -1265,6 +1376,11 @@ impl BangumiPage {
     fn handle_list_input(&mut self, key: KeyCode, keys: &Keybindings) -> Option<AppAction> {
         if keys.matches_confirm(key) || keys.matches_play(key) {
             return self.activate_selected();
+        }
+        if keys.matches_left(key) {
+            self.selected_source = tab_index(self.tab);
+            self.focus = BangumiFocus::Sources;
+            return Some(AppAction::None);
         }
         match self.tab {
             BangumiTab::Rank | BangumiTab::Index => {
@@ -1291,18 +1407,10 @@ impl BangumiPage {
                         grid.move_page_down();
                     }
                     moved_down = true;
-                } else if keys.matches_page_up(key) {
-                    if let Some(grid) = self.active_grid_mut() {
-                        grid.move_page_up();
-                    }
-                } else if keys.matches_left(key) {
-                    if let Some(grid) = self.active_grid_mut() {
-                        grid.move_left();
-                    }
-                } else if keys.matches_right(key)
+                } else if keys.matches_page_up(key)
                     && let Some(grid) = self.active_grid_mut()
                 {
-                    grid.move_right();
+                    grid.move_page_up();
                 }
                 if moved_down && self.can_load_more() {
                     return Some(AppAction::LoadMoreBangumi);
@@ -1406,7 +1514,8 @@ impl Default for BangumiPage {
 impl Component for BangumiPage {
     fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, keys: &Keybindings) {
         let layout = PageLayout::new(area);
-        self.render_header(frame, layout.header, theme, keys);
+        self.draw_sources(frame, layout.sources, theme);
+        self.render_header(frame, layout.header, theme);
         self.render_filter_bar(frame, layout.filters, theme);
         self.render_content(frame, layout.content, theme);
         self.render_footer(frame, layout.footer, theme, keys);
@@ -1446,63 +1555,121 @@ impl Component for BangumiPage {
             || keys.matches_section_next(key)
             || key == KeyCode::Char('f')
         {
-            self.toggle_focus();
+            self.toggle_filter_focus();
             return Some(AppAction::None);
         }
 
         match self.focus {
+            BangumiFocus::Sources => self.handle_sources_input(key, keys),
             BangumiFocus::Filter => self.handle_filter_input(key, keys),
             BangumiFocus::List => self.handle_list_input(key, keys),
         }
     }
 
     fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> Option<AppAction> {
-        if area.height < 8 || area.width < 10 {
-            return None;
-        }
-        if !matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
+        if area.height < 8 || area.width < 40 {
             return None;
         }
         let layout = PageLayout::new(area);
-        if event.row >= layout.header.y && event.row < layout.header.y + layout.header.height {
-            let column = event.column.saturating_sub(layout.header.x);
-            let hit = self
-                .tab_hit_ranges
-                .iter()
-                .find(|(_, start, end)| column >= *start && column < *end)
-                .map(|(tab, _, _)| *tab);
-            if let Some(tab) = hit {
-                return Some(AppAction::SwitchBangumiTab(tab));
-            }
-            return None;
-        }
-        if layout
-            .filters
-            .contains(Position::new(event.column, event.row))
-        {
-            let inner_x = layout.filters.x.saturating_add(1);
-            let inner_y = layout.filters.y.saturating_add(1);
-            let hit = if event.row == inner_y {
-                let column = event.column.saturating_sub(inner_x);
-                self.filter_hit_ranges
-                    .iter()
-                    .find(|(_, start, end)| column >= *start && column < *end)
-                    .map(|(index, _, _)| *index)
-            } else {
-                None
-            };
-            self.focus = BangumiFocus::Filter;
-            if let Some(index) = hit {
-                self.filter_cursor = index;
+        let position = Position::new(event.column, event.row);
+
+        if layout.sources.contains(position) {
+            match event.kind {
+                MouseEventKind::ScrollDown => {
+                    self.selected_source = (self.selected_source + 1) % SOURCE_COUNT;
+                    self.focus = BangumiFocus::Sources;
+                }
+                MouseEventKind::ScrollUp => {
+                    self.selected_source = if self.selected_source == 0 {
+                        SOURCE_COUNT - 1
+                    } else {
+                        self.selected_source - 1
+                    };
+                    self.focus = BangumiFocus::Sources;
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if event.row <= layout.sources.y
+                        || event.row >= layout.sources.bottom().saturating_sub(1)
+                    {
+                        return Some(AppAction::None);
+                    }
+                    let row = (event.row - (layout.sources.y + 1)) as usize;
+                    if row < SOURCE_COUNT {
+                        self.selected_source = row;
+                        let target = source_tab(row);
+                        if target != self.tab {
+                            return Some(AppAction::SwitchBangumiTab(target));
+                        }
+                        self.focus = BangumiFocus::Sources;
+                    }
+                }
+                _ => {}
             }
             return Some(AppAction::None);
         }
-        if layout
-            .content
-            .contains(Position::new(event.column, event.row))
-        {
-            return self.handle_content_mouse(event, layout.content);
+
+        if !layout.main.contains(position) {
+            return None;
         }
+
+        if layout.filters.contains(position) {
+            if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.focus = BangumiFocus::Filter;
+                let inner_x = layout.filters.x.saturating_add(1);
+                let inner_y = layout.filters.y.saturating_add(1);
+                if event.row == inner_y {
+                    let column = event.column.saturating_sub(inner_x);
+                    if let Some(index) = self
+                        .filter_hit_ranges
+                        .iter()
+                        .find(|(_, start, end)| column >= *start && column < *end)
+                        .map(|(index, _, _)| *index)
+                    {
+                        self.filter_cursor = index;
+                    }
+                }
+            }
+            return Some(AppAction::None);
+        }
+
+        if layout.content.contains(position) {
+            match event.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.focus = BangumiFocus::List;
+                    return self.handle_content_mouse(event, layout.content);
+                }
+                MouseEventKind::Down(MouseButton::Middle) => {
+                    self.focus = BangumiFocus::List;
+                    return self.activate_selected();
+                }
+                MouseEventKind::ScrollDown => {
+                    self.focus = BangumiFocus::List;
+                    if let Some(grid) = self.active_grid_mut() {
+                        grid.move_down();
+                        let near_bottom = grid.is_near_bottom(grid.cached_visible_rows);
+                        if near_bottom && self.can_load_more() {
+                            return Some(AppAction::LoadMoreBangumi);
+                        }
+                    } else if self.tab == BangumiTab::Timeline {
+                        let count = self.timeline_episode_count();
+                        if count > 0 {
+                            self.timeline_selected = (self.timeline_selected + 1).min(count - 1);
+                        }
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    self.focus = BangumiFocus::List;
+                    if let Some(grid) = self.active_grid_mut() {
+                        grid.move_up();
+                    } else if self.tab == BangumiTab::Timeline {
+                        self.timeline_selected = self.timeline_selected.saturating_sub(1);
+                    }
+                }
+                _ => {}
+            }
+            return Some(AppAction::None);
+        }
+
         None
     }
 }
@@ -1691,10 +1858,10 @@ mod tests {
         assert!(page.rank_loaded);
         assert!(!page.tab_needs_load());
         let text = render(&mut page, 100, 30);
-        assert!(text.contains("排行"));
-        assert!(text.contains("时间线"));
-        assert!(text.contains("索引"));
-        assert!(text.contains("[1]排行"));
+        assert!(text.contains("番剧排行"));
+        assert!(text.contains("新番时间线"));
+        assert!(text.contains("番剧索引"));
+        assert!(text.contains("番剧番剧排行"));
         assert!(text.contains("暂无排行数据"));
 
         // Rank data state.
@@ -2039,26 +2206,128 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_on_tab_strip_switches_tabs() {
+    fn mouse_click_on_left_pane_selects_and_switches_views() {
         let mut page = BangumiPage::new();
-        render(&mut page, 100, 30);
-        let timeline_range = page
-            .tab_hit_ranges
-            .iter()
-            .find(|(tab, _, _)| *tab == BangumiTab::Timeline)
-            .map(|(_, start, end)| (*start, *end))
-            .expect("timeline tab range");
-        let column = (timeline_range.0 + timeline_range.1) / 2;
-        let event = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        };
-        match page.handle_mouse(event, Rect::new(0, 0, 100, 30)) {
+        let area = Rect::new(0, 0, 100, 30);
+        render(&mut page, area.width, area.height);
+        let sources = PageLayout::new(area).sources;
+        page.selected_source = 2;
+
+        // Border rows are ignored.
+        assert!(matches!(
+            page.handle_mouse(click(3, sources.y), area),
+            Some(AppAction::None)
+        ));
+        assert_eq!(page.selected_source, 2);
+
+        // Clicking the Timeline row switches and selects it.
+        match page.handle_mouse(click(3, sources.y + 2), area) {
             Some(AppAction::SwitchBangumiTab(tab)) => assert_eq!(tab, BangumiTab::Timeline),
-            other => panic!("expected tab switch, got {other:?}"),
+            other => panic!("expected view switch, got {other:?}"),
         }
+        assert_eq!(page.selected_source, 1);
+
+        // Clicking the active view's row only focuses the left pane.
+        page.set_tab(BangumiTab::Index);
+        page.focus = BangumiFocus::List;
+        assert!(matches!(
+            page.handle_mouse(click(3, sources.y + 3), area),
+            Some(AppAction::None)
+        ));
+        assert_eq!(page.selected_source, 2);
+        assert_eq!(page.focus, BangumiFocus::Sources);
+
+        // Wheel scrolling cycles the views.
+        page.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 3,
+                row: sources.y + 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+        );
+        assert_eq!(page.selected_source, 0);
+        assert_eq!(page.focus, BangumiFocus::Sources);
+    }
+
+    #[test]
+    fn sources_pane_keyboard_cycles_and_enters_views() {
+        let mut page = BangumiPage::new();
+        let keys = keys();
+        assert_eq!(page.focus, BangumiFocus::Sources);
+        assert_eq!(page.selected_source, 0);
+
+        page.handle_input(KeyCode::Down, &keys);
+        assert_eq!(page.selected_source, 1);
+        assert_eq!(page.tab, BangumiTab::Rank);
+        page.handle_input(KeyCode::Down, &keys);
+        assert_eq!(page.selected_source, 2);
+        page.handle_input(KeyCode::Down, &keys);
+        assert_eq!(page.selected_source, 0);
+        page.handle_input(KeyCode::Up, &keys);
+        assert_eq!(page.selected_source, 2);
+
+        // Enter on a different view emits a switch and lands in the list.
+        page.selected_source = 1;
+        match page.handle_input(KeyCode::Enter, &keys) {
+            Some(AppAction::SwitchBangumiTab(tab)) => assert_eq!(tab, BangumiTab::Timeline),
+            other => panic!("expected view switch, got {other:?}"),
+        }
+        assert_eq!(page.focus, BangumiFocus::List);
+
+        // Enter on the active view enters the list without an action.
+        page.focus = BangumiFocus::Sources;
+        page.selected_source = 0;
+        assert!(matches!(
+            page.handle_input(KeyCode::Right, &keys),
+            Some(AppAction::None)
+        ));
+        assert_eq!(page.focus, BangumiFocus::List);
+    }
+
+    #[test]
+    fn list_and_filter_return_focus_to_sources_synced_with_tab() {
+        let mut page = BangumiPage::new();
+        let keys = keys();
+
+        page.set_tab(BangumiTab::Timeline);
+        assert_eq!(page.focus, BangumiFocus::List);
+        page.selected_source = 0;
+        page.handle_input(KeyCode::Left, &keys);
+        assert_eq!(page.focus, BangumiFocus::Sources);
+        assert_eq!(page.selected_source, 1);
+
+        page.set_tab(BangumiTab::Index);
+        page.handle_input(KeyCode::Char('f'), &keys);
+        assert_eq!(page.focus, BangumiFocus::Filter);
+        assert_eq!(page.filter_cursor, 0);
+        page.selected_source = 0;
+        page.handle_input(KeyCode::Left, &keys);
+        assert_eq!(page.focus, BangumiFocus::Sources);
+        assert_eq!(page.selected_source, 2);
+    }
+
+    #[test]
+    fn grids_use_single_column_list_layout() {
+        let page = BangumiPage::new();
+        for grid in [&page.rank_grid, &page.index_grid] {
+            assert_eq!(grid.columns, 1);
+            assert!(grid.list_layout);
+            assert_eq!(grid.card_height, 7);
+        }
+    }
+
+    #[test]
+    fn renders_two_pane_layout_header_filters_and_footer() {
+        let mut page = BangumiPage::new();
+        let text = render(&mut page, 120, 40);
+        assert!(text.contains("番剧番剧排行"));
+        assert!(text.contains("番剧索引"));
+        assert!(text.contains("周期"));
+        assert!(text.contains("类别"));
+        assert!(text.contains("切换视图"));
+        assert!(text.contains("按刷新键加载数据"));
     }
 
     fn click(column: u16, row: u16) -> MouseEvent {
@@ -2111,7 +2380,7 @@ mod tests {
     }
 
     #[test]
-    fn grid_click_selects_clicked_column() {
+    fn grid_click_selects_clicked_row() {
         let mut page = BangumiPage::new();
         page.begin_load(BangumiTab::Rank);
         let day = page.rank_day;
@@ -2121,28 +2390,24 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         render(&mut page, area.width, area.height);
         let content = PageLayout::new(area).content;
-        let card_width = content.width / page.rank_grid.columns as u16;
-        assert!(card_width > 2);
+        assert_eq!(page.rank_grid.columns, 1);
 
-        // Middle card of the first row is index 1, not index 0.
+        // Rows are stacked one card per row.
         assert!(
-            page.handle_mouse(click(content.x + card_width + 1, content.y + 1), area)
+            page.handle_mouse(click(content.x + 1, content.y + 1), area)
                 .is_none()
         );
-        assert_eq!(page.rank_grid.selected_index, 1);
+        assert_eq!(page.rank_grid.selected_index, 0);
+        assert_eq!(page.focus, BangumiFocus::List);
 
-        // Second row, third column is index 5.
         assert!(
             page.handle_mouse(
-                click(
-                    content.x + card_width * 2 + 1,
-                    content.y + page.rank_grid.card_height + 1,
-                ),
+                click(content.x + 1, content.y + page.rank_grid.card_height + 1),
                 area,
             )
             .is_none()
         );
-        assert_eq!(page.rank_grid.selected_index, 5);
+        assert_eq!(page.rank_grid.selected_index, 1);
 
         // A click past the loaded cards selects nothing.
         assert!(
@@ -2155,7 +2420,66 @@ mod tests {
             )
             .is_none()
         );
-        assert_eq!(page.rank_grid.selected_index, 5);
+        assert_eq!(page.rank_grid.selected_index, 2);
+        assert!(
+            page.handle_mouse(
+                click(
+                    content.x + 1,
+                    content.y + page.rank_grid.card_height * 6 + 1
+                ),
+                area,
+            )
+            .is_none()
+        );
+        assert_eq!(page.rank_grid.selected_index, 2);
+    }
+
+    #[test]
+    fn content_mouse_scroll_and_middle_click_on_index() {
+        let mut page = BangumiPage::new();
+        page.set_tab(BangumiTab::Index);
+        loaded_index(&mut page, &[11, 12, 13], 1);
+
+        let area = Rect::new(0, 0, 120, 40);
+        render(&mut page, area.width, area.height);
+        // Force a one-row viewport so the near-bottom trigger fires.
+        page.index_grid.cached_visible_rows = 1;
+        let content = PageLayout::new(area).content;
+
+        // Left click selects the first row and focuses the list.
+        assert!(
+            page.handle_mouse(click(content.x + 1, content.y + 1), area)
+                .is_none()
+        );
+        assert_eq!(page.index_grid.selected_index, 0);
+        assert_eq!(page.focus, BangumiFocus::List);
+
+        // Scrolling down moves one card and near the bottom asks for more.
+        let action = page.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: content.x + 1,
+                row: content.y + 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+        );
+        assert!(matches!(action, Some(AppAction::LoadMoreBangumi)));
+        assert_eq!(page.index_grid.selected_index, 1);
+
+        // Middle click opens the selection.
+        match page.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Middle),
+                column: content.x + 1,
+                row: content.y + 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+        ) {
+            Some(AppAction::OpenBangumiDetail(season_id)) => assert_eq!(season_id, 12),
+            other => panic!("expected detail open, got {other:?}"),
+        }
     }
 
     #[test]
