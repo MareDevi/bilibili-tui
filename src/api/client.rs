@@ -878,11 +878,16 @@ impl ApiClient {
         Ok(list)
     }
 
-    pub async fn get_bangumi_season(&self, season_id: i64) -> Result<super::bangumi::SeasonResult> {
+    pub async fn get_bangumi_season(
+        &self,
+        query: super::bangumi::SeasonQuery,
+    ) -> Result<super::bangumi::SeasonResult> {
+        let (key, id) = query.param();
         let url = format!(
-            "{}/pgc/view/web/season?season_id={}",
+            "{}/pgc/view/web/season?{}={}",
             BilibiliApiDomain::Main.as_str(),
-            season_id,
+            key,
+            id,
         );
         let value = self.get_json(&url).await?;
         Self::check_code(&value)?;
@@ -893,6 +898,42 @@ impl ApiClient {
         let result: super::bangumi::SeasonResult =
             serde_json::from_value(result_val).map_err(|e| anyhow!("解析番剧详情失败: {}", e))?;
         Ok(result)
+    }
+
+    pub async fn get_bangumi_season_section(
+        &self,
+        season_id: i64,
+    ) -> Result<super::bangumi::SeasonSectionResult> {
+        let url = format!(
+            "{}/pgc/web/season/section?season_id={}",
+            BilibiliApiDomain::Main.as_str(),
+            season_id,
+        );
+        let value = self.get_json(&url).await?;
+        Self::check_code(&value)?;
+        let result_val = value
+            .get("result")
+            .cloned()
+            .ok_or_else(|| anyhow!("API 返回缺少 result 字段"))?;
+        serde_json::from_value(result_val).map_err(|e| anyhow!("解析番剧分集失败: {}", e))
+    }
+
+    pub async fn get_bangumi_review_user(
+        &self,
+        media_id: i64,
+    ) -> Result<super::bangumi::ReviewUser> {
+        let url = format!(
+            "{}/pgc/review/user?media_id={}",
+            BilibiliApiDomain::Main.as_str(),
+            media_id,
+        );
+        let value = self.get_json(&url).await?;
+        Self::check_code(&value)?;
+        let result_val = value
+            .get("result")
+            .cloned()
+            .ok_or_else(|| anyhow!("API 返回缺少 result 字段"))?;
+        serde_json::from_value(result_val).map_err(|e| anyhow!("解析番剧用户状态失败: {}", e))
     }
 
     // Dynamic Feed API

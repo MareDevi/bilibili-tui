@@ -1,7 +1,7 @@
 //! Bangumi detail page showing season info and episode list
 
 use super::{Component, Theme, shortcut_footer};
-use crate::api::bangumi::{BangumiEpisode, SeasonResult};
+use crate::api::bangumi::{BangumiEpisode, SeasonQuery, SeasonResult};
 use crate::api::client::ApiClient;
 use crate::application::AppAction;
 use crate::storage::Keybindings;
@@ -94,7 +94,10 @@ impl BangumiDetailPage {
     pub async fn load_data(&mut self, api_client: &ApiClient) {
         self.loading = true;
         self.error_message = None;
-        match api_client.get_bangumi_season(self.season_id).await {
+        match api_client
+            .get_bangumi_season(SeasonQuery::SeasonId(self.season_id))
+            .await
+        {
             Ok(season) => self.set_season(season),
             Err(e) => self.set_error(format!("加载番剧详情失败: {}", e)),
         }

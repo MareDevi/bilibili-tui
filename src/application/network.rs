@@ -1,7 +1,7 @@
 use crate::api::{
     ApiClient,
     article::ArticleData,
-    bangumi::{SeasonRankItem, SeasonResult},
+    bangumi::{SeasonQuery, SeasonRankItem, SeasonResult},
     comment::{CommentItem, CommentType},
     dynamic::DynamicItem,
     dynamic::UpListItem,
@@ -911,12 +911,34 @@ async fn handle_command(api_client: Arc<ApiClient>, command: NetworkCommand) -> 
             Err(e) => failed(req_id, "bangumi_index", e),
         },
         NetworkCommand::LoadBangumiDetail { req_id, season_id } => {
-            match api_client.get_bangumi_season(season_id).await {
-                Ok(season) => NetworkEvent::BangumiDetailLoaded {
-                    req_id,
-                    season_id,
-                    season,
-                },
+            match api_client
+                .get_bangumi_season(SeasonQuery::SeasonId(season_id))
+                .await
+            {
+                Ok(mut season) => {
+                    let effective_season_id = if season.season_id > 0 {
+                        season.season_id
+                    } else {
+                        season_id
+                    };
+                    if effective_season_id > 0
+                        && let Ok(sections) = api_client
+                            .get_bangumi_season_section(effective_season_id)
+                            .await
+                    {
+                        season.apply_section_result(sections);
+                    }
+                    if let Some(media_id) = season.media_id.filter(|id| *id > 0)
+                        && let Ok(review) = api_client.get_bangumi_review_user(media_id).await
+                    {
+                        season.review_user = Some(review);
+                    }
+                    NetworkEvent::BangumiDetailLoaded {
+                        req_id,
+                        season_id,
+                        season,
+                    }
+                }
                 Err(e) => failed(req_id, "bangumi_detail", e),
             }
         }
