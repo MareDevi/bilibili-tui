@@ -174,6 +174,10 @@ impl BangumiDetailPage {
             .map(|fe| AppAction::PlayBangumiEpisode {
                 ep_id: fe.episode.id,
                 season_id: self.season_id,
+                aid: fe.episode.aid,
+                cid: fe.episode.cid,
+                season_type: self.season.as_ref().and_then(|s| s.season_type),
+                duration: fe.episode.duration.unwrap_or(0),
                 title: fe.episode.display_title(),
             })
     }

@@ -1186,7 +1186,11 @@ impl App {
             }
             AppAction::PlayBangumiEpisode {
                 ep_id,
-                season_id: _,
+                season_id,
+                aid,
+                cid,
+                season_type,
+                duration,
                 title: _,
             } => {
                 let session_id = self.allocate_playback_session();
@@ -1194,7 +1198,14 @@ impl App {
                 self.playback.status = crate::domain::playback::PlaybackStatus::Starting;
                 match media::play_bangumi_episode(
                     self.api_client.clone(),
-                    ep_id,
+                    media::BangumiPlaybackRequest {
+                        ep_id,
+                        season_id,
+                        aid,
+                        cid,
+                        season_type,
+                        duration,
+                    },
                     self.credentials.as_ref(),
                     self.config.video_quality,
                     self.playback_event_tx.clone(),

@@ -187,6 +187,10 @@ pub enum AppAction {
     PlayBangumiEpisode {
         ep_id: i64,
         season_id: i64,
+        aid: i64,
+        cid: i64,
+        season_type: Option<i32>,
+        duration: i64,
         title: String,
     },
     /// Load a page of bangumi episode comments (aid, page)

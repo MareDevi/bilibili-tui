@@ -71,7 +71,15 @@ pub async fn play_video(
     };
 
     // Report watch start
-    let _ = crate::api::heartbeat::report_watch_start(&api_client, aid, cid, bvid, duration).await;
+    let _ = crate::api::heartbeat::report_watch_start(
+        &api_client,
+        aid,
+        cid,
+        Some(bvid),
+        None,
+        duration,
+    )
+    .await;
 
     let start_ts = chrono::Utc::now().timestamp();
 
@@ -175,12 +183,14 @@ pub async fn play_video(
                         &api_client,
                         aid,
                         cid,
-                        &bvid,
+                        Some(&bvid),
+                        None,
                         played_time,
                         played_time,
                         real_played_time,
                         start_ts,
                         0, // play_type: 0 = playing
+                        duration,
                     ).await;
                 }
                 _ = position_interval.tick() => {
@@ -226,12 +236,14 @@ pub async fn play_video(
                         &api_client,
                         aid,
                         cid,
-                        &bvid,
+                        Some(&bvid),
+                        None,
                         played_time,
                         played_time,
                         real_played_time,
                         start_ts,
                         4, // play_type: 4 = end
+                        duration,
                     ).await;
 
                     if result.as_ref().is_ok_and(|status| status.success())
@@ -861,7 +873,8 @@ async fn run_playlist(
         &api_client,
         items[index].aid,
         prepared.cid,
-        &items[index].bvid,
+        Some(&items[index].bvid),
+        None,
         prepared.duration,
     )
     .await;
@@ -948,7 +961,7 @@ async fn run_playlist(
                 start_ts = chrono::Utc::now().timestamp();
                 let _ = tx.send(PlaybackEvent::ItemChanged { session_id, index, bvid: items[index].bvid.clone() });
                 let _ = crate::api::heartbeat::report_watch_start(
-                    &api_client, items[index].aid, prepared.cid, &items[index].bvid, prepared.duration,
+                    &api_client, items[index].aid, prepared.cid, Some(&items[index].bvid), None, prepared.duration,
                 ).await;
             }
             line = async {
@@ -1034,12 +1047,14 @@ async fn report_playlist_heartbeat(
         api_client,
         item.aid,
         prepared.cid,
-        &item.bvid,
+        Some(&item.bvid),
+        None,
         played,
         played,
         started.elapsed().as_secs() as i64,
         start_ts,
         play_type,
+        prepared.duration,
     )
     .await;
 }
@@ -1102,17 +1117,67 @@ fn ordered_playlist(
     Ok((items, start_index))
 }
 
+/// Typed metadata needed to play a bangumi episode and report its progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BangumiPlaybackRequest {
+    pub ep_id: i64,
+    pub season_id: i64,
+    pub aid: i64,
+    pub cid: i64,
+    pub season_type: Option<i32>,
+    pub duration: i64,
+}
+
+/// Progress reporting needs a logged-in session and a playable PGC identity.
+fn should_report_bangumi_progress(logged_in: bool, aid: i64, cid: i64) -> bool {
+    logged_in && aid > 0 && cid > 0
+}
+
 /// Play an authenticated bangumi episode, falling back to yt-dlp when the
 /// direct PGC stream cannot be proxied.
+///
+/// Progress reporting reuses the UGC reporting endpoints (see the protocol
+/// notes at the top of `src/api/heartbeat.rs`): there is no separate PGC
+/// heartbeat API. Requests carry `type = "4"`, `sub_type = season_type`,
+/// `epid = ep_id`, `sid = season_id`, omit `bvid`, and use
+/// `refer_url = https://www.bilibili.com/bangumi/play/ep{ep_id}`. Reporting
+/// only runs when logged in with a valid `aid`/`cid`; guests stay silent and
+/// playback is never blocked or interrupted by reporting errors.
 pub async fn play_bangumi_episode(
     api_client: Arc<ApiClient>,
-    ep_id: i64,
+    request: BangumiPlaybackRequest,
     credentials: Option<&Credentials>,
     video_quality: VideoQuality,
     playback_event_tx: Sender<PlaybackEvent>,
     session_id: u64,
 ) -> Result<()> {
+    let ep_id = request.ep_id;
     let video_url = format!("https://www.bilibili.com/bangumi/play/ep{}", ep_id);
+    let report_progress =
+        should_report_bangumi_progress(credentials.is_some(), request.aid, request.cid);
+    let pgc_context = crate::api::heartbeat::PgcHeartbeatContext {
+        season_id: request.season_id,
+        ep_id,
+        season_type: request.season_type,
+    };
+    let start_ts = chrono::Utc::now().timestamp();
+
+    if report_progress {
+        // Fire and forget: a slow or failing report must never delay playback.
+        let watch_api_client = Arc::clone(&api_client);
+        tokio::spawn(async move {
+            let _ = crate::api::heartbeat::report_watch_start(
+                &watch_api_client,
+                request.aid,
+                request.cid,
+                None,
+                Some(pgc_context),
+                request.duration,
+            )
+            .await;
+        });
+    }
+
     let media_proxy = match api_client.get_bangumi_play_url(ep_id, video_quality).await {
         Ok(play_url) => match crate::api::cdn::rank_streams(&play_url, video_quality).await {
             Ok(streams) => proxy::MediaProxy::start(streams).await.ok(),
@@ -1120,6 +1185,9 @@ pub async fn play_bangumi_episode(
         },
         Err(_) => None,
     };
+
+    let ipc_path = mpv_ipc_path("bilibili-tui-bangumi", &format!("{ep_id}-{session_id}"));
+    remove_stale_mpv_ipc(&ipc_path);
 
     let mut cmd = Command::new("mpv");
     cmd.stdout(Stdio::null());
@@ -1140,6 +1208,7 @@ pub async fn play_bangumi_episode(
     cmd.arg("--script-opts-append=double_video_fps=yes");
     cmd.arg(format!("--referrer={video_url}"));
     cmd.arg(format!("--http-header-fields=Referer: {video_url}"));
+    cmd.arg(format!("--input-ipc-server={}", ipc_path.display()));
     if let Some(proxy) = &media_proxy {
         cmd.arg("--ytdl=no");
         cmd.arg(format!("--audio-file={}", proxy.audio_url));
@@ -1155,17 +1224,75 @@ pub async fn play_bangumi_episode(
             if let Some(path) = &cookie_path_to_clean {
                 let _ = crate::storage::remove_cookie_export(path);
             }
+            let _ = std::fs::remove_file(&ipc_path);
             return Err(error.into());
         }
     };
 
     tokio::spawn(async move {
-        let status = child.wait().await;
+        let status = if report_progress {
+            let started = Instant::now();
+            let mut played_time: i64 = 0;
+            let mut heartbeat_interval = interval_at(
+                Instant::now() + Duration::from_secs(15),
+                Duration::from_secs(15),
+            );
+            let mut position_interval = interval_at(
+                Instant::now() + Duration::from_secs(1),
+                Duration::from_secs(1),
+            );
+            let status = loop {
+                tokio::select! {
+                    _ = heartbeat_interval.tick() => {
+                        let real_played_time = started.elapsed().as_secs() as i64;
+                        let _ = crate::api::heartbeat::report_heartbeat(
+                            &api_client,
+                            request.aid,
+                            request.cid,
+                            None,
+                            Some(pgc_context),
+                            played_time,
+                            played_time,
+                            real_played_time,
+                            start_ts,
+                            0, // play_type: 0 = playing
+                            request.duration,
+                        ).await;
+                    }
+                    _ = position_interval.tick() => {
+                        if let Some(position) = mpv_time_pos(&ipc_path).await {
+                            played_time = position.max(0.0) as i64;
+                        }
+                    }
+                    result = child.wait() => break result,
+                }
+            };
+            let real_played_time = started.elapsed().as_secs() as i64;
+            let _ = crate::api::heartbeat::report_heartbeat(
+                &api_client,
+                request.aid,
+                request.cid,
+                None,
+                Some(pgc_context),
+                played_time,
+                played_time,
+                real_played_time,
+                start_ts,
+                4, // play_type: 4 = end
+                request.duration,
+            )
+            .await;
+            status
+        } else {
+            // Guest or no playable PGC identity: stay silent, just wait for mpv.
+            child.wait().await
+        };
 
-        // Cleanup cookie file
+        // Cleanup cookie + IPC files
         if let Some(path) = cookie_path_to_clean {
             let _ = crate::storage::remove_cookie_export(&path);
         }
+        let _ = tokio::fs::remove_file(&ipc_path).await;
         drop(media_proxy);
         let event = match status {
             Ok(status) if status.success() => PlaybackEvent::Finished {
@@ -1825,5 +1952,19 @@ mod playlist_tests {
         assert!(mpv_time_pos(&ipc).await.expect("position after switch") >= position);
         child.kill().await.expect("stop test mpv");
         let _ = std::fs::remove_file(ipc);
+    }
+}
+
+#[cfg(test)]
+mod bangumi_tests {
+    use super::*;
+
+    #[test]
+    fn progress_reporting_requires_login_and_playable_identity() {
+        assert!(!should_report_bangumi_progress(false, 1001, 2002));
+        assert!(!should_report_bangumi_progress(true, 0, 2002));
+        assert!(!should_report_bangumi_progress(true, 1001, 0));
+        assert!(!should_report_bangumi_progress(true, -1, -1));
+        assert!(should_report_bangumi_progress(true, 1001, 2002));
     }
 }
