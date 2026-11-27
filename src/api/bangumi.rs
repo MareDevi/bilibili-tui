@@ -2,41 +2,249 @@
 
 use serde::Deserialize;
 
+// ─── Shared PGC enums ───────────────────────────────────────────────────────
+
+/// Season type (`season_type`) shared by the season index, rank list and
+/// timeline endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BangumiSeasonType {
+    #[default]
+    Anime,
+    Movie,
+    Documentary,
+    Guochuang,
+    Tv,
+    Variety,
+}
+
+impl BangumiSeasonType {
+    pub const ALL: [Self; 6] = [
+        Self::Anime,
+        Self::Movie,
+        Self::Documentary,
+        Self::Guochuang,
+        Self::Tv,
+        Self::Variety,
+    ];
+
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::Anime => 1,
+            Self::Movie => 2,
+            Self::Documentary => 3,
+            Self::Guochuang => 4,
+            Self::Tv => 5,
+            Self::Variety => 7,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Anime => "番剧",
+            Self::Movie => "电影",
+            Self::Documentary => "纪录片",
+            Self::Guochuang => "国创",
+            Self::Tv => "电视剧",
+            Self::Variety => "综艺",
+        }
+    }
+
+    /// Movie / documentary / TV rows filter by `release_date`; the rest by
+    /// `year`.
+    pub fn uses_release_date(self) -> bool {
+        matches!(self, Self::Movie | Self::Documentary | Self::Tv)
+    }
+}
+
+/// Ranking window (`day`) for `/pgc/web/rank/list`.
+///
+/// The endpoint is not documented in `bilibili-API-collect`; it was observed
+/// from the Bilibili web rank page. Live probing confirmed only `day=3` and
+/// `day=7` succeed (`code=0`), whereas `day=1` and `day=30` return `code=-400`.
+/// `season_type` accepts 1/2/3/4/5/7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BangumiRankDay {
+    #[default]
+    ThreeDays,
+    Week,
+}
+
+impl BangumiRankDay {
+    pub const ALL: [Self; 2] = [Self::ThreeDays, Self::Week];
+
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::ThreeDays => 3,
+            Self::Week => 7,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ThreeDays => "三日榜",
+            Self::Week => "周榜",
+        }
+    }
+}
+
+/// Timeline season type (`types`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TimelineType {
+    #[default]
+    Anime,
+    Movie,
+    Guochuang,
+}
+
+impl TimelineType {
+    pub const ALL: [Self; 3] = [Self::Anime, Self::Movie, Self::Guochuang];
+
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::Anime => 1,
+            Self::Movie => 3,
+            Self::Guochuang => 4,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Anime => "番剧",
+            Self::Movie => "电影",
+            Self::Guochuang => "国创",
+        }
+    }
+}
+
+/// Sort field (`order`) for `/pgc/season/index/result`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SeasonIndexOrder {
+    UpdateTime,
+    Danmaku,
+    Play,
+    #[default]
+    Follow,
+    Score,
+    PubDate,
+    ReleaseDate,
+}
+
+impl SeasonIndexOrder {
+    pub const ALL: [Self; 7] = [
+        Self::UpdateTime,
+        Self::Danmaku,
+        Self::Play,
+        Self::Follow,
+        Self::Score,
+        Self::PubDate,
+        Self::ReleaseDate,
+    ];
+
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::UpdateTime => 0,
+            Self::Danmaku => 1,
+            Self::Play => 2,
+            Self::Follow => 3,
+            Self::Score => 4,
+            Self::PubDate => 5,
+            Self::ReleaseDate => 6,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::UpdateTime => "更新时间",
+            Self::Danmaku => "弹幕数量",
+            Self::Play => "播放数量",
+            Self::Follow => "追番人数",
+            Self::Score => "最高评分",
+            Self::PubDate => "开播时间",
+            Self::ReleaseDate => "上映时间",
+        }
+    }
+}
+
+/// Sort direction (`sort`) for `/pgc/season/index/result`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SeasonIndexSort {
+    #[default]
+    Desc,
+    Asc,
+}
+
+impl SeasonIndexSort {
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::Desc => 0,
+            Self::Asc => 1,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Desc => "降序",
+            Self::Asc => "升序",
+        }
+    }
+
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Desc => Self::Asc,
+            Self::Asc => Self::Desc,
+        }
+    }
+}
+
 // ─── Timeline ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct TimelineDay {
+    #[serde(default)]
     pub date: String,
-    #[serde(rename = "date_ts")]
+    #[serde(rename = "date_ts", default)]
     pub date_ts: i64,
-    #[serde(rename = "day_of_week")]
+    #[serde(rename = "day_of_week", default)]
     pub day_of_week: i32,
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub episodes: Vec<TimelineEpisode>,
-    #[serde(rename = "is_today")]
+    #[serde(rename = "is_today", default)]
     pub is_today: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TimelineEpisode {
+    #[serde(default)]
     pub cover: String,
+    #[serde(default)]
     pub delay: i32,
-    #[serde(rename = "ep_cover")]
+    #[serde(rename = "delay_id", default)]
+    pub delay_id: i64,
+    #[serde(rename = "delay_index", default)]
+    pub delay_index: String,
+    #[serde(rename = "delay_reason", default)]
+    pub delay_reason: String,
+    #[serde(rename = "ep_cover", default)]
     pub ep_cover: String,
-    #[serde(rename = "episode_id")]
+    #[serde(rename = "episode_id", default)]
     pub episode_id: i64,
+    #[serde(default)]
     pub follows: String,
+    #[serde(default)]
     pub plays: String,
-    #[serde(rename = "pub_index")]
+    #[serde(rename = "pub_index", default)]
     pub pub_index: String,
-    #[serde(rename = "pub_time")]
+    #[serde(rename = "pub_time", default)]
     pub pub_time: String,
-    #[serde(rename = "pub_ts")]
+    #[serde(rename = "pub_ts", default)]
     pub pub_ts: i64,
+    #[serde(default)]
     pub published: i32,
-    #[serde(rename = "season_id")]
+    #[serde(rename = "season_id", default)]
     pub season_id: i64,
-    #[serde(rename = "square_cover")]
+    #[serde(rename = "square_cover", default)]
     pub square_cover: String,
+    #[serde(default)]
     pub title: String,
 }
 
@@ -133,6 +341,231 @@ fn format_views(view: i64) -> String {
         format!("{:.1}万", view as f64 / 10000.0)
     } else {
         view.to_string()
+    }
+}
+
+// ─── Season Index ───────────────────────────────────────────────────────────
+
+/// Query for `GET /pgc/season/index/result`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeasonIndexQuery {
+    pub season_type: BangumiSeasonType,
+    pub page: i32,
+    pub pagesize: i32,
+    pub season_version: i32,
+    pub spoken_language_type: i32,
+    pub area: String,
+    pub year: String,
+    pub is_finish: i32,
+    pub copyright: String,
+    pub season_status: String,
+    pub season_month: i32,
+    pub order: SeasonIndexOrder,
+    pub sort: SeasonIndexSort,
+    pub style_id: i32,
+    pub producer_id: i32,
+}
+
+impl Default for SeasonIndexQuery {
+    fn default() -> Self {
+        Self {
+            season_type: BangumiSeasonType::Anime,
+            page: 1,
+            pagesize: 20,
+            season_version: -1,
+            spoken_language_type: -1,
+            area: "-1".to_string(),
+            year: "-1".to_string(),
+            is_finish: -1,
+            copyright: "-1".to_string(),
+            season_status: "-1".to_string(),
+            season_month: -1,
+            order: SeasonIndexOrder::Follow,
+            sort: SeasonIndexSort::Desc,
+            style_id: -1,
+            producer_id: -1,
+        }
+    }
+}
+
+impl SeasonIndexQuery {
+    /// Builds the full query string pairs. `year` becomes `release_date` for
+    /// season types whose catalogue filters by release date.
+    pub fn to_query_params(&self) -> Vec<(&'static str, String)> {
+        let mut params = vec![
+            ("type", "1".to_string()),
+            ("season_type", self.season_type.as_i32().to_string()),
+            ("st", self.season_type.as_i32().to_string()),
+            ("page", self.page.to_string()),
+            ("pagesize", self.pagesize.to_string()),
+            ("season_version", self.season_version.to_string()),
+            (
+                "spoken_language_type",
+                self.spoken_language_type.to_string(),
+            ),
+            ("area", self.area.clone()),
+            ("is_finish", self.is_finish.to_string()),
+            ("copyright", self.copyright.clone()),
+            ("season_status", self.season_status.clone()),
+            ("season_month", self.season_month.to_string()),
+            ("order", self.order.as_i32().to_string()),
+            ("sort", self.sort.as_i32().to_string()),
+            ("style_id", self.style_id.to_string()),
+            ("producer_id", self.producer_id.to_string()),
+        ];
+        if self.season_type.uses_release_date() {
+            params.push(("release_date", format_release_date(&self.year)));
+        } else {
+            params.push(("year", self.year.clone()));
+        }
+        params
+    }
+}
+
+/// Converts a `[2025,2026)` style interval into the `release_date` format the
+/// endpoint expects: `[2025-01-01 00:00:00,2026-01-01 00:00:00)`.
+fn format_release_date(year: &str) -> String {
+    let trimmed = year.trim();
+    if trimmed.is_empty() {
+        return "-1".to_string();
+    }
+    if trimmed == "-1" || trimmed.contains(' ') {
+        return trimmed.to_string();
+    }
+    let Some(inner) = trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(')'))
+    else {
+        return trimmed.to_string();
+    };
+    let Some((left, right)) = inner.split_once(',') else {
+        return trimmed.to_string();
+    };
+    format!("[{},{})", expand_year_bound(left), expand_year_bound(right))
+}
+
+fn expand_year_bound(bound: &str) -> String {
+    let bound = bound.trim();
+    if bound.is_empty() {
+        return String::new();
+    }
+    if bound.len() == 4 && bound.chars().all(|ch| ch.is_ascii_digit()) {
+        format!("{bound}-01-01 00:00:00")
+    } else {
+        bound.to_string()
+    }
+}
+
+fn deserialize_string_or_number_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(deserialize_string_or_number(deserializer)?.unwrap_or_default())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IndexFirstEp {
+    #[serde(rename = "ep_id", default)]
+    pub ep_id: i64,
+    #[serde(default)]
+    pub cover: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeasonIndexItem {
+    #[serde(rename = "season_id", default)]
+    pub season_id: i64,
+    #[serde(rename = "media_id", default)]
+    pub media_id: i64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(rename = "subTitle", default)]
+    pub sub_title: String,
+    #[serde(default)]
+    pub cover: String,
+    #[serde(rename = "index_show", default)]
+    pub index_show: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_number_default")]
+    pub order: String,
+    #[serde(
+        rename = "order_type",
+        default,
+        deserialize_with = "deserialize_string_or_number_default"
+    )]
+    pub order_type: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_number_default")]
+    pub score: String,
+    #[serde(default)]
+    pub badge: String,
+    #[serde(rename = "badge_info", default)]
+    pub badge_info: Option<BadgeInfo>,
+    #[serde(rename = "season_status", default)]
+    pub season_status: Option<i32>,
+    #[serde(rename = "season_type", default)]
+    pub season_type: Option<i32>,
+    #[serde(rename = "is_finish", default)]
+    pub is_finish: Option<i32>,
+    #[serde(default)]
+    pub link: String,
+    #[serde(rename = "first_ep", default)]
+    pub first_ep: Option<IndexFirstEp>,
+}
+
+impl SeasonIndexItem {
+    pub fn cover_url(&self) -> String {
+        if self.cover.starts_with("//") {
+            format!("https:{}", self.cover)
+        } else {
+            self.cover.clone()
+        }
+    }
+
+    pub fn display_subtitle(&self) -> String {
+        if !self.sub_title.is_empty() {
+            self.sub_title.clone()
+        } else if !self.index_show.is_empty() {
+            self.index_show.clone()
+        } else {
+            "-".to_string()
+        }
+    }
+
+    pub fn badge_text(&self) -> Option<&str> {
+        if !self.badge.is_empty() {
+            return Some(&self.badge);
+        }
+        self.badge_info
+            .as_ref()
+            .and_then(|info| info.text.as_deref())
+            .filter(|text| !text.is_empty())
+    }
+
+    pub fn score_text(&self) -> String {
+        if self.score.is_empty() {
+            "-".to_string()
+        } else {
+            self.score.clone()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeasonIndexPage {
+    #[serde(rename = "has_next", default)]
+    pub has_next: i32,
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
+    pub list: Vec<SeasonIndexItem>,
+    #[serde(default)]
+    pub num: i32,
+    #[serde(default)]
+    pub size: i32,
+    #[serde(default)]
+    pub total: i64,
+}
+
+impl SeasonIndexPage {
+    pub fn has_next_page(&self) -> bool {
+        self.has_next != 0
     }
 }
 
@@ -1235,5 +1668,166 @@ mod tests {
         let no_rights: SeasonResult = serde_json::from_value(json!({})).unwrap();
         assert!(!no_rights.is_area_limited());
         assert!(!no_rights.is_followed());
+    }
+
+    #[test]
+    fn season_index_query_encodes_year_and_release_date_filters() {
+        let param = |query: &SeasonIndexQuery, key: &'static str| {
+            query
+                .to_query_params()
+                .into_iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v)
+        };
+
+        let anime = SeasonIndexQuery::default();
+        assert_eq!(param(&anime, "type").as_deref(), Some("1"));
+        assert_eq!(param(&anime, "season_type").as_deref(), Some("1"));
+        assert_eq!(param(&anime, "st").as_deref(), Some("1"));
+        assert_eq!(param(&anime, "page").as_deref(), Some("1"));
+        assert_eq!(param(&anime, "pagesize").as_deref(), Some("20"));
+        assert_eq!(param(&anime, "order").as_deref(), Some("3"));
+        assert_eq!(param(&anime, "sort").as_deref(), Some("0"));
+        assert_eq!(param(&anime, "year").as_deref(), Some("-1"));
+        assert_eq!(param(&anime, "release_date"), None);
+
+        let anime_range = SeasonIndexQuery {
+            year: "[2025,2026)".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(param(&anime_range, "year").as_deref(), Some("[2025,2026)"));
+        assert_eq!(param(&anime_range, "release_date"), None);
+
+        let movie = SeasonIndexQuery {
+            season_type: BangumiSeasonType::Movie,
+            year: "[2025,2026)".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(param(&movie, "year"), None);
+        assert_eq!(
+            param(&movie, "release_date").as_deref(),
+            Some("[2025-01-01 00:00:00,2026-01-01 00:00:00)")
+        );
+
+        let open_interval = SeasonIndexQuery {
+            season_type: BangumiSeasonType::Tv,
+            year: "[,1980)".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            param(&open_interval, "release_date").as_deref(),
+            Some("[,1980-01-01 00:00:00)")
+        );
+
+        let already_formatted = SeasonIndexQuery {
+            season_type: BangumiSeasonType::Documentary,
+            year: "[2025-01-01 00:00:00,2026-01-01 00:00:00)".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            param(&already_formatted, "release_date").as_deref(),
+            Some("[2025-01-01 00:00:00,2026-01-01 00:00:00)")
+        );
+
+        let movie_default = SeasonIndexQuery {
+            season_type: BangumiSeasonType::Movie,
+            ..Default::default()
+        };
+        assert_eq!(param(&movie_default, "release_date").as_deref(), Some("-1"));
+
+        let sorted = SeasonIndexQuery {
+            order: SeasonIndexOrder::Score,
+            sort: SeasonIndexSort::Asc,
+            ..Default::default()
+        };
+        assert_eq!(param(&sorted, "order").as_deref(), Some("4"));
+        assert_eq!(param(&sorted, "sort").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn season_index_page_deserializes_real_payload_and_null_lists() {
+        let page: SeasonIndexPage = serde_json::from_value(json!({
+            "has_next": 1,
+            "list": [{
+                "season_id": 30000,
+                "media_id": 28223000,
+                "title": "示例番剧",
+                "subTitle": "更新至第3话",
+                "cover": "//i0.hdslb.com/cover.jpg",
+                "index_show": "全12话",
+                "order": "3",
+                "order_type": "1",
+                "score": "8.8",
+                "badge": "独家",
+                "badge_info": {"bg_color": "#fff", "bg_color_night": "#000", "text": "会员"},
+                "season_status": 13,
+                "season_type": 1,
+                "is_finish": 0,
+                "link": "https://www.bilibili.com/bangumi/play/ss30000",
+                "first_ep": {"ep_id": 500, "cover": "//i0.hdslb.com/ep.jpg"}
+            }],
+            "num": 1,
+            "size": 20,
+            "total": 100
+        }))
+        .unwrap();
+
+        assert!(page.has_next_page());
+        assert_eq!(page.list.len(), 1);
+        let item = &page.list[0];
+        assert_eq!(item.sub_title, "更新至第3话");
+        assert_eq!(item.display_subtitle(), "更新至第3话");
+        assert_eq!(item.cover_url(), "https://i0.hdslb.com/cover.jpg");
+        assert_eq!(item.badge_text(), Some("独家"));
+        assert_eq!(item.score_text(), "8.8");
+        assert_eq!(item.first_ep.as_ref().map(|ep| ep.ep_id), Some(500));
+
+        let sparse: SeasonIndexPage = serde_json::from_value(json!({"list": null})).unwrap();
+        assert!(sparse.list.is_empty());
+        assert!(!sparse.has_next_page());
+
+        let sparse_item: SeasonIndexItem = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(sparse_item.display_subtitle(), "-");
+        assert_eq!(sparse_item.score_text(), "-");
+        assert_eq!(sparse_item.badge_text(), None);
+        assert!(sparse_item.cover_url().is_empty());
+    }
+
+    #[test]
+    fn timeline_episodes_tolerate_delay_fields_and_missing_values() {
+        let day: TimelineDay = serde_json::from_value(json!({
+            "date": "2026-11-27",
+            "date_ts": 1764201600,
+            "day_of_week": 5,
+            "is_today": 1,
+            "episodes": [{
+                "episode_id": 500,
+                "season_id": 7,
+                "title": "标题",
+                "delay": 0,
+                "delay_id": 4,
+                "delay_index": "1",
+                "delay_reason": "延期"
+            }]
+        }))
+        .unwrap();
+        let episode = &day.episodes[0];
+        assert_eq!(
+            (
+                episode.delay_id,
+                episode.delay_index.as_str(),
+                episode.delay_reason.as_str()
+            ),
+            (4, "1", "延期")
+        );
+
+        let sparse: TimelineDay = serde_json::from_value(json!({"episodes": null})).unwrap();
+        assert!(sparse.episodes.is_empty());
+        assert_eq!(sparse.date, "");
+
+        let sparse_episode: TimelineEpisode = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(sparse_episode.delay_id, 0);
+        assert!(sparse_episode.delay_index.is_empty());
+        assert!(sparse_episode.delay_reason.is_empty());
     }
 }

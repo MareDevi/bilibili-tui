@@ -1,7 +1,10 @@
 use crate::api::{
     ApiClient,
     article::ArticleData,
-    bangumi::{SeasonQuery, SeasonRankItem, SeasonResult},
+    bangumi::{
+        BangumiRankDay, BangumiSeasonType, SeasonIndexPage, SeasonIndexQuery, SeasonQuery,
+        SeasonRankItem, SeasonResult, TimelineDay, TimelineType,
+    },
     comment::{CommentItem, CommentType},
     dynamic::DynamicItem,
     dynamic::UpListItem,
@@ -134,8 +137,21 @@ pub enum NetworkCommand {
         req_id: u64,
         dynamic_id: String,
     },
-    LoadBangumiIndex {
+    LoadBangumiRank {
         req_id: u64,
+        day: BangumiRankDay,
+        season_type: BangumiSeasonType,
+    },
+    LoadBangumiTimeline {
+        req_id: u64,
+        types: TimelineType,
+        before: u8,
+        after: u8,
+    },
+    LoadSeasonIndex {
+        req_id: u64,
+        query: SeasonIndexQuery,
+        append: bool,
     },
     LoadBangumiDetail {
         req_id: u64,
@@ -281,9 +297,24 @@ pub enum NetworkEvent {
         has_more_comments: bool,
         image_urls: Vec<String>,
     },
-    BangumiIndexLoaded {
+    BangumiRankLoaded {
         req_id: u64,
+        day: BangumiRankDay,
+        season_type: BangumiSeasonType,
         items: Vec<SeasonRankItem>,
+    },
+    BangumiTimelineLoaded {
+        req_id: u64,
+        types: TimelineType,
+        before: u8,
+        after: u8,
+        days: Vec<TimelineDay>,
+    },
+    SeasonIndexLoaded {
+        req_id: u64,
+        query: SeasonIndexQuery,
+        append: bool,
+        page: SeasonIndexPage,
     },
     BangumiDetailLoaded {
         req_id: u64,
@@ -380,7 +411,10 @@ impl NetworkCommand {
             Self::LoadVideoDetail { .. } => "video_detail",
             Self::LoadUpPage { .. } | Self::LoadUpVideos { .. } => "up",
             Self::LoadDynamicDetail { .. } => "dynamic_detail",
-            Self::LoadBangumiIndex { .. } | Self::LoadBangumiDetail { .. } => "bangumi",
+            Self::LoadBangumiRank { .. } => "bangumi_rank",
+            Self::LoadBangumiTimeline { .. } => "bangumi_timeline",
+            Self::LoadSeasonIndex { .. } => "bangumi_index",
+            Self::LoadBangumiDetail { .. } => "bangumi_detail",
             Self::LoadBangumiComments { .. } => "bangumi_comments",
         }
     }
@@ -919,8 +953,45 @@ async fn handle_command(api_client: Arc<ApiClient>, command: NetworkCommand) -> 
                 image_urls,
             }
         }
-        NetworkCommand::LoadBangumiIndex { req_id } => match api_client.get_bangumi_rank().await {
-            Ok(items) => NetworkEvent::BangumiIndexLoaded { req_id, items },
+        NetworkCommand::LoadBangumiRank {
+            req_id,
+            day,
+            season_type,
+        } => match api_client.get_bangumi_rank(day, season_type).await {
+            Ok(items) => NetworkEvent::BangumiRankLoaded {
+                req_id,
+                day,
+                season_type,
+                items,
+            },
+            Err(e) => failed(req_id, "bangumi_rank", e),
+        },
+        NetworkCommand::LoadBangumiTimeline {
+            req_id,
+            types,
+            before,
+            after,
+        } => match api_client.get_bangumi_timeline(types, before, after).await {
+            Ok(days) => NetworkEvent::BangumiTimelineLoaded {
+                req_id,
+                types,
+                before,
+                after,
+                days,
+            },
+            Err(e) => failed(req_id, "bangumi_timeline", e),
+        },
+        NetworkCommand::LoadSeasonIndex {
+            req_id,
+            query,
+            append,
+        } => match api_client.get_season_index(&query).await {
+            Ok(page) => NetworkEvent::SeasonIndexLoaded {
+                req_id,
+                query,
+                append,
+                page,
+            },
             Err(e) => failed(req_id, "bangumi_index", e),
         },
         NetworkCommand::LoadBangumiDetail { req_id, season_id } => {

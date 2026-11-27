@@ -852,8 +852,23 @@ impl ApiClient {
     }
 
     // Bangumi API
-    pub async fn get_bangumi_timeline(&self) -> Result<Vec<super::bangumi::TimelineDay>> {
-        let url = self.build_url(BilibiliApiDomain::Main, "/pgc/web/timeline?types=1");
+
+    /// Fetches the weekly timeline for `types`, clamped to at most 7 days in
+    /// each direction.
+    pub async fn get_bangumi_timeline(
+        &self,
+        types: super::bangumi::TimelineType,
+        before: u8,
+        after: u8,
+    ) -> Result<Vec<super::bangumi::TimelineDay>> {
+        let (before, after) = timeline_window(before, after);
+        let url = format!(
+            "{}/pgc/web/timeline?types={}&before={}&after={}",
+            BilibiliApiDomain::Main.as_str(),
+            types.as_i32(),
+            before,
+            after,
+        );
         let value = self.get_json(&url).await?;
         Self::check_code(&value)?;
         let result = value
@@ -863,19 +878,51 @@ impl ApiClient {
         Ok(result)
     }
 
-    pub async fn get_bangumi_rank(&self) -> Result<Vec<super::bangumi::SeasonRankItem>> {
+    /// Fetches `/pgc/web/rank/list`.
+    ///
+    /// This endpoint is not documented in `bilibili-API-collect`; it was
+    /// observed from the Bilibili web rank page. Live probing confirmed
+    /// `day=3` / `day=7` succeed (`code=0`) while `day=1` / `day=30` return
+    /// `code=-400`; `season_type` accepts 1/2/3/4/5/7.
+    pub async fn get_bangumi_rank(
+        &self,
+        day: super::bangumi::BangumiRankDay,
+        season_type: super::bangumi::BangumiSeasonType,
+    ) -> Result<Vec<super::bangumi::SeasonRankItem>> {
         let url = format!(
-            "{}/pgc/web/rank/list?day=3&season_type=1",
+            "{}/pgc/web/rank/list?day={}&season_type={}",
             BilibiliApiDomain::Main.as_str(),
+            day.as_i32(),
+            season_type.as_i32(),
         );
         let value = self.get_json(&url).await?;
         Self::check_code(&value)?;
-        let list = value
-            .get("result")
-            .and_then(|r| r.get("list"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-        Ok(list)
+        match value.get("result").and_then(|r| r.get("list")) {
+            None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+            Some(list) => {
+                serde_json::from_value(list.clone()).map_err(|e| anyhow!("解析番剧排行失败: {}", e))
+            }
+        }
+    }
+
+    /// Fetches `/pgc/season/index/result`. The payload lives in `data`, not
+    /// `result`; bracketed `year` / `release_date` values must stay URL-encoded.
+    pub async fn get_season_index(
+        &self,
+        query: &super::bangumi::SeasonIndexQuery,
+    ) -> Result<super::bangumi::SeasonIndexPage> {
+        let url = reqwest::Url::parse_with_params(
+            "https://api.bilibili.com/pgc/season/index/result",
+            query.to_query_params(),
+        )
+        .context("构建番剧索引 URL 失败")?;
+        let value = self.get_json(url.as_str()).await?;
+        Self::check_code(&value)?;
+        let data_val = value
+            .get("data")
+            .cloned()
+            .ok_or_else(|| anyhow!("API 返回缺少 data 字段"))?;
+        serde_json::from_value(data_val).map_err(|e| anyhow!("解析番剧索引失败: {}", e))
     }
 
     pub async fn get_bangumi_season(
@@ -1617,6 +1664,12 @@ fn parse_home_videos(items: Vec<serde_json::Value>) -> Vec<super::recommend::Vid
         .collect()
 }
 
+/// Clamps the timeline request window to the documented 0..=7 day range in
+/// each direction.
+fn timeline_window(before: u8, after: u8) -> (u8, u8) {
+    (before.min(7), after.min(7))
+}
+
 impl Default for ApiClient {
     fn default() -> Self {
         Self::new()
@@ -1625,9 +1678,29 @@ impl Default for ApiClient {
 
 #[cfg(test)]
 mod live_contract_tests {
-    use super::ApiClient;
+    use super::{ApiClient, timeline_window};
+    use crate::api::bangumi::{BangumiRankDay, BangumiSeasonType, SeasonIndexSort, TimelineType};
     use crate::api::space::SpaceVideoOrder;
     use crate::storage::VideoQuality;
+
+    #[test]
+    fn bangumi_parameters_match_probed_endpoint_values() {
+        assert_eq!(BangumiRankDay::ALL.map(BangumiRankDay::as_i32), [3, 7]);
+        assert_eq!(
+            BangumiSeasonType::ALL.map(BangumiSeasonType::as_i32),
+            [1, 2, 3, 4, 5, 7]
+        );
+        assert_eq!(TimelineType::ALL.map(TimelineType::as_i32), [1, 3, 4]);
+        assert!(BangumiSeasonType::Movie.uses_release_date());
+        assert!(BangumiSeasonType::Documentary.uses_release_date());
+        assert!(BangumiSeasonType::Tv.uses_release_date());
+        assert!(!BangumiSeasonType::Anime.uses_release_date());
+        assert_eq!(SeasonIndexSort::Desc.toggle(), SeasonIndexSort::Asc);
+        assert_eq!(SeasonIndexSort::Asc.toggle(), SeasonIndexSort::Desc);
+        assert_eq!(timeline_window(0, 0), (0, 0));
+        assert_eq!(timeline_window(3, 7), (3, 7));
+        assert_eq!(timeline_window(8, 200), (7, 7));
+    }
 
     #[test]
     fn bangumi_v2_playurl_extracts_nested_video_info() {

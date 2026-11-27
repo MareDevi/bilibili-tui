@@ -1,3 +1,4 @@
+use crate::api::bangumi::{BangumiRankDay, BangumiSeasonType, SeasonIndexQuery, TimelineType};
 use crate::api::favorite::{FavoriteOrder, FavoriteSource};
 use crate::api::history::HistoryKey;
 use crate::api::recommend::HomeFeed;
@@ -154,8 +155,29 @@ pub enum AppAction {
     RefreshBangumi,
     /// Switch bangumi tab
     SwitchBangumiTab(BangumiTab),
+    /// Load the ranked bangumi list for a window and season type
+    LoadBangumiRank {
+        day: BangumiRankDay,
+        season_type: BangumiSeasonType,
+    },
+    /// Load the bangumi timeline
+    LoadBangumiTimeline {
+        types: TimelineType,
+        before: u8,
+        after: u8,
+    },
+    /// Load a season index page, appending when `append` is set
+    LoadSeasonIndex {
+        query: SeasonIndexQuery,
+        append: bool,
+    },
     /// Open bangumi detail page
     OpenBangumiDetail(i64),
+    /// Open a bangumi episode directly from the timeline (no auto-play)
+    OpenBangumiEpisode {
+        season_id: i64,
+        ep_id: i64,
+    },
     /// Load more bangumi index items
     LoadMoreBangumi,
     /// Play a bangumi episode
@@ -176,6 +198,7 @@ pub enum AppAction {
 /// Bangumi page tabs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BangumiTab {
+    Rank,
     Timeline,
     Index,
 }

@@ -397,12 +397,56 @@ impl App {
                     page.error_message = None;
                 }
             }
-            network::NetworkEvent::BangumiIndexLoaded { req_id, items } => {
+            network::NetworkEvent::BangumiRankLoaded {
+                req_id,
+                day,
+                season_type,
+                items,
+            } => {
+                if !self.is_latest_request("bangumi_rank", req_id) {
+                    return;
+                }
+                if let Page::Bangumi(page) = &mut self.current_page {
+                    if page.rank_day != day || page.rank_season_type != season_type {
+                        return;
+                    }
+                    page.set_rank_items(items);
+                }
+            }
+            network::NetworkEvent::BangumiTimelineLoaded {
+                req_id,
+                types,
+                before,
+                after,
+                days,
+            } => {
+                if !self.is_latest_request("bangumi_timeline", req_id) {
+                    return;
+                }
+                if let Page::Bangumi(page) = &mut self.current_page {
+                    if page.timeline_type != types
+                        || page.timeline_before != before
+                        || page.timeline_after != after
+                    {
+                        return;
+                    }
+                    page.set_timeline_days(days);
+                }
+            }
+            network::NetworkEvent::SeasonIndexLoaded {
+                req_id,
+                query,
+                append,
+                page: index_page,
+            } => {
                 if !self.is_latest_request("bangumi_index", req_id) {
                     return;
                 }
                 if let Page::Bangumi(page) = &mut self.current_page {
-                    page.set_index_items(items);
+                    if !page.accepts_season_index_query(&query) {
+                        return;
+                    }
+                    page.set_season_index_page(index_page, append);
                 }
             }
             network::NetworkEvent::BangumiDetailLoaded {
@@ -516,6 +560,9 @@ impl App {
                     }
                     (Page::ArticleDetail(page), "article_detail") => {
                         page.set_error(format!("加载专栏失败: {error}"));
+                    }
+                    (Page::Bangumi(page), "bangumi_rank") => {
+                        page.set_error(format!("加载番剧排行失败: {}", error));
                     }
                     (Page::Bangumi(page), "bangumi_timeline") => {
                         page.set_error(format!("加载番剧时间表失败: {}", error));

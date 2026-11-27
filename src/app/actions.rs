@@ -1,5 +1,5 @@
 use crate::app::{App, PreviousPage};
-use crate::application::{AppAction, network};
+use crate::application::{AppAction, BangumiTab, network};
 use crate::infrastructure::{media, persistence};
 use crate::presentation::tui::{
     ArticleDetailPage, BangumiDetailPage, BangumiPage, DynamicDetailPage, DynamicPage,
@@ -60,6 +60,10 @@ impl App {
                     | AppAction::LoadMoreLive
                     | AppAction::SwitchToBangumi
                     | AppAction::RefreshBangumi
+                    | AppAction::SwitchBangumiTab(_)
+                    | AppAction::LoadBangumiRank { .. }
+                    | AppAction::LoadBangumiTimeline { .. }
+                    | AppAction::LoadSeasonIndex { .. }
                     | AppAction::LoadMoreBangumi
             )
         {
@@ -996,8 +1000,76 @@ impl App {
                 self.current_page = Page::Bangumi(Box::<BangumiPage>::default());
                 self.init_current_page().await;
             }
-            AppAction::SwitchBangumiTab(_tab) => {
-                // Single tab mode, no-op
+            AppAction::SwitchBangumiTab(tab) => {
+                self.request_bangumi_tab(tab, false);
+            }
+            AppAction::LoadBangumiRank { day, season_type } => {
+                if let Page::Bangumi(page) = &mut self.current_page {
+                    page.rank_day = day;
+                    page.rank_season_type = season_type;
+                    page.begin_load();
+                } else {
+                    return;
+                }
+                let req_id = self.next_request_id("bangumi_rank");
+                self.send_network_command(network::NetworkCommand::LoadBangumiRank {
+                    req_id,
+                    day,
+                    season_type,
+                });
+            }
+            AppAction::LoadBangumiTimeline {
+                types,
+                before,
+                after,
+            } => {
+                let before = before.min(7);
+                let after = after.min(7);
+                if let Page::Bangumi(page) = &mut self.current_page {
+                    page.timeline_type = types;
+                    page.timeline_before = before;
+                    page.timeline_after = after;
+                    page.begin_load();
+                } else {
+                    return;
+                }
+                let req_id = self.next_request_id("bangumi_timeline");
+                self.send_network_command(network::NetworkCommand::LoadBangumiTimeline {
+                    req_id,
+                    types,
+                    before,
+                    after,
+                });
+            }
+            AppAction::LoadSeasonIndex { query, append } => {
+                let effective = if let Page::Bangumi(page) = &mut self.current_page {
+                    if append {
+                        if !page.index_has_next || page.loading_more {
+                            return;
+                        }
+                        page.loading_more = true;
+                        let mut next = query;
+                        next.page = page.index_loaded_page + 1;
+                        Some(next)
+                    } else {
+                        page.season_index_query = query;
+                        page.index_loaded_page = 0;
+                        page.index_has_next = true;
+                        page.begin_load();
+                        Some(page.season_index_query.clone())
+                    }
+                } else {
+                    None
+                };
+                let Some(query) = effective else {
+                    return;
+                };
+                let req_id = self.next_request_id("bangumi_index");
+                self.send_network_command(network::NetworkCommand::LoadSeasonIndex {
+                    req_id,
+                    query,
+                    append,
+                });
             }
             AppAction::OpenBangumiDetail(season_id) => {
                 // Invalidate comments that belong to the season being left.
@@ -1044,8 +1116,39 @@ impl App {
                     page,
                 });
             }
+            AppAction::OpenBangumiEpisode { season_id, ep_id } => {
+                // Comments belong to the season being left.
+                self.next_request_id("bangumi_comments");
+                if matches!(self.current_page, Page::Bangumi(_)) {
+                    self.save_previous_page();
+                    if let Page::Bangumi(bangumi_page) = std::mem::replace(
+                        &mut self.current_page,
+                        Page::Bangumi(Box::<BangumiPage>::default()),
+                    ) {
+                        self.cached_bangumi = Some(*bangumi_page);
+                    }
+                } else if matches!(self.current_page, Page::BangumiDetail(_)) {
+                    if let Page::BangumiDetail(previous_page) = std::mem::replace(
+                        &mut self.current_page,
+                        Page::Bangumi(Box::<BangumiPage>::default()),
+                    ) {
+                        self.navigation_stack
+                            .push(Page::BangumiDetail(previous_page));
+                    }
+                } else {
+                    self.save_previous_page();
+                }
+                // Timeline entry: open the episode without auto-play.
+                let detail_page = BangumiDetailPage::new_for_episode(season_id, ep_id, false);
+                self.current_page = Page::BangumiDetail(Box::new(detail_page));
+                let req_id = self.next_request_id("bangumi_detail");
+                self.send_network_command(network::NetworkCommand::LoadBangumiDetail {
+                    req_id,
+                    season_id,
+                });
+            }
             AppAction::LoadMoreBangumi => {
-                // Rank API has no pagination
+                self.request_season_index_page(true);
             }
             AppAction::PlayBangumiEpisode {
                 ep_id,
@@ -1245,6 +1348,11 @@ impl App {
             self.sidebar.select(NavItem::Search);
             self.current_page = Page::Search(SearchPage::new());
         }
+        if let Page::Bangumi(page) = &self.current_page {
+            let tab = page.tab;
+            self.request_bangumi_tab(tab, false);
+            return;
+        }
         match &mut self.current_page {
             Page::Login(page) => {
                 let client = self.api_client.clone();
@@ -1331,10 +1439,8 @@ impl App {
             Page::Settings(_) => {
                 // Settings doesn't need async initialization
             }
-            Page::Bangumi(page) => {
-                page.loading = true;
-                let req_id = self.next_request_id("bangumi_index");
-                self.send_network_command(network::NetworkCommand::LoadBangumiIndex { req_id });
+            Page::Bangumi(_) => {
+                // Dispatched before the match so the whole page stays free.
             }
             Page::BangumiDetail(_) => {
                 // BangumiDetail is initialized when created
@@ -1343,6 +1449,84 @@ impl App {
                 // UpPage is initialized by OpenUpPage with an identity-bound request.
             }
         }
+    }
+
+    /// Switches the bangumi tab and requests its data unless it is cached
+    /// (or `force`d).
+    fn request_bangumi_tab(&mut self, tab: BangumiTab, force: bool) {
+        let request = if let Page::Bangumi(page) = &mut self.current_page {
+            page.set_tab(tab);
+            if force || page.tab_needs_load() {
+                page.begin_load();
+                Some((
+                    page.rank_day,
+                    page.rank_season_type,
+                    page.timeline_type,
+                    page.timeline_before,
+                    page.timeline_after,
+                    page.season_index_query.clone(),
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let Some((day, season_type, types, before, after, query)) = request else {
+            return;
+        };
+        match tab {
+            BangumiTab::Rank => {
+                let req_id = self.next_request_id("bangumi_rank");
+                self.send_network_command(network::NetworkCommand::LoadBangumiRank {
+                    req_id,
+                    day,
+                    season_type,
+                });
+            }
+            BangumiTab::Timeline => {
+                let req_id = self.next_request_id("bangumi_timeline");
+                self.send_network_command(network::NetworkCommand::LoadBangumiTimeline {
+                    req_id,
+                    types,
+                    before,
+                    after,
+                });
+            }
+            BangumiTab::Index => {
+                let req_id = self.next_request_id("bangumi_index");
+                self.send_network_command(network::NetworkCommand::LoadSeasonIndex {
+                    req_id,
+                    query,
+                    append: false,
+                });
+            }
+        }
+    }
+
+    fn request_season_index_page(&mut self, append: bool) {
+        let query = if let Page::Bangumi(page) = &mut self.current_page {
+            if append {
+                if !page.index_has_next || page.loading_more {
+                    return;
+                }
+                page.loading_more = true;
+                let mut next = page.season_index_query.clone();
+                next.page = page.index_loaded_page + 1;
+                next
+            } else {
+                page.begin_load();
+                page.season_index_query.clone()
+            }
+        } else {
+            return;
+        };
+        let req_id = self.next_request_id("bangumi_index");
+        self.send_network_command(network::NetworkCommand::LoadSeasonIndex {
+            req_id,
+            query,
+            append,
+        });
     }
 
     pub(super) fn apply_minimal_mode(&mut self, enabled: bool) {
@@ -1358,6 +1542,8 @@ impl App {
             "hotwords",
             "live_init",
             "live_more",
+            "bangumi_rank",
+            "bangumi_timeline",
             "bangumi_index",
         ] {
             self.next_request_id(key);

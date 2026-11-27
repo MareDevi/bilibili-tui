@@ -177,8 +177,12 @@ impl Default for App {
 #[cfg(test)]
 mod tests {
     use super::{App, RequestTracker};
-    use crate::application::AppAction;
+    use crate::api::bangumi::{
+        BangumiRankDay, BangumiSeasonType, SeasonIndexPage, SeasonIndexQuery, TimelineDay,
+        TimelineType,
+    };
     use crate::application::network::{NetworkCommand, NetworkEvent};
+    use crate::application::{AppAction, BangumiTab};
     use crate::domain::playback::PlaybackEvent;
     use crate::presentation::tui::{
         BangumiDetailPage, FavoritesPage, HomePage, NavItem, Page, VideoDetailPage,
@@ -218,6 +222,78 @@ mod tests {
             "content": {"message": format!("评论 {}", rpid)}
         }))
         .expect("comment fixture")
+    }
+
+    fn season_index_page(num: i32, has_next: i32, season_ids: &[i64]) -> SeasonIndexPage {
+        serde_json::from_value(serde_json::json!({
+            "has_next": has_next,
+            "list": season_ids
+                .iter()
+                .map(|season_id| serde_json::json!({
+                    "season_id": season_id,
+                    "media_id": 1000 + season_id,
+                    "title": format!("index-{season_id}"),
+                    "subTitle": "更新至第3话",
+                    "cover": "//i0.hdslb.com/index.jpg",
+                    "index_show": "全12话",
+                    "order": "3",
+                    "order_type": "1",
+                    "score": "8.8",
+                    "badge": "独家",
+                    "badge_info": {"bg_color": "#fff", "bg_color_night": "#000", "text": "会员"},
+                    "season_status": 13,
+                    "season_type": 1,
+                    "is_finish": 0,
+                    "link": "https://www.bilibili.com/bangumi/play/ss1",
+                    "first_ep": {"ep_id": 555, "cover": "//i0.hdslb.com/ep.jpg"}
+                }))
+                .collect::<Vec<_>>(),
+            "num": num,
+            "size": 20,
+            "total": 100
+        }))
+        .expect("season index fixture")
+    }
+
+    fn bangumi_rank_item(season_id: i64) -> crate::api::bangumi::SeasonRankItem {
+        serde_json::from_value(serde_json::json!({
+            "badge": "独家",
+            "cover": "//i0.hdslb.com/rank.jpg",
+            "new_ep": {"index_show": "全12话"},
+            "season_id": season_id,
+            "title": format!("rank-{season_id}"),
+            "rating": "9.1",
+            "stat": {"view": 12_000}
+        }))
+        .expect("rank fixture")
+    }
+
+    fn timeline_day(episode_id: i64) -> TimelineDay {
+        serde_json::from_value(serde_json::json!({
+            "date": "2026-11-27",
+            "date_ts": 1_764_201_600_i64,
+            "day_of_week": 5,
+            "is_today": 1,
+            "episodes": [{
+                "cover": "//i0.hdslb.com/cover.jpg",
+                "delay": 0,
+                "delay_id": 4,
+                "delay_index": "1",
+                "delay_reason": "延期",
+                "ep_cover": "//i0.hdslb.com/ep.jpg",
+                "episode_id": episode_id,
+                "follows": "1.0万",
+                "plays": "2.0万",
+                "pub_index": "第1话",
+                "pub_time": "2026-11-27",
+                "pub_ts": 1_764_201_600_i64,
+                "published": 1,
+                "season_id": 7,
+                "square_cover": "//i0.hdslb.com/square.jpg",
+                "title": "episode"
+            }]
+        }))
+        .expect("timeline fixture")
     }
 
     pub(super) fn minimal_app() -> (
@@ -260,6 +336,20 @@ mod tests {
             AppAction::SwitchToBangumi,
             AppAction::RefreshBangumi,
             AppAction::LoadMoreBangumi,
+            AppAction::SwitchBangumiTab(BangumiTab::Rank),
+            AppAction::LoadBangumiRank {
+                day: BangumiRankDay::Week,
+                season_type: BangumiSeasonType::Movie,
+            },
+            AppAction::LoadBangumiTimeline {
+                types: TimelineType::Anime,
+                before: 3,
+                after: 3,
+            },
+            AppAction::LoadSeasonIndex {
+                query: SeasonIndexQuery::default(),
+                append: false,
+            },
         ] {
             app.handle_action(action).await;
             assert!(matches!(app.current_page, Page::Search(_)));
@@ -666,6 +756,137 @@ mod tests {
         assert!(matches!(
             &app.current_page,
             Page::BangumiDetail(page) if page.season_id == 9
+        ));
+    }
+
+    #[tokio::test]
+    async fn bangumi_tab_events_ignore_stale_ids_and_mismatched_params() {
+        let (mut app, _rx) = minimal_app();
+        app.current_page = Page::Bangumi(Box::default());
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        app.network_event_rx = event_rx;
+
+        let rank_ids = |app: &App| match &app.current_page {
+            Page::Bangumi(page) => page.rank_season_ids.clone(),
+            _ => Vec::new(),
+        };
+        let timeline_days = |app: &App| match &app.current_page {
+            Page::Bangumi(page) => page.timeline_days.len(),
+            _ => 0,
+        };
+        let index_ids = |app: &App| match &app.current_page {
+            Page::Bangumi(page) => page.index_season_ids.clone(),
+            _ => Vec::new(),
+        };
+
+        let stale_rank = app.next_request_id("bangumi_rank");
+        let latest_rank = app.next_request_id("bangumi_rank");
+        let stale_timeline = app.next_request_id("bangumi_timeline");
+        let latest_timeline = app.next_request_id("bangumi_timeline");
+        let stale_index = app.next_request_id("bangumi_index");
+        let latest_index = app.next_request_id("bangumi_index");
+
+        event_tx
+            .send(NetworkEvent::BangumiRankLoaded {
+                req_id: stale_rank,
+                day: BangumiRankDay::ThreeDays,
+                season_type: BangumiSeasonType::Anime,
+                items: vec![bangumi_rank_item(1)],
+            })
+            .expect("stale rank");
+        event_tx
+            .send(NetworkEvent::BangumiRankLoaded {
+                req_id: latest_rank,
+                day: BangumiRankDay::Week,
+                season_type: BangumiSeasonType::Anime,
+                items: vec![bangumi_rank_item(2)],
+            })
+            .expect("mismatched rank day");
+        app.drain_network_events();
+        assert!(rank_ids(&app).is_empty());
+
+        event_tx
+            .send(NetworkEvent::BangumiRankLoaded {
+                req_id: latest_rank,
+                day: BangumiRankDay::ThreeDays,
+                season_type: BangumiSeasonType::Anime,
+                items: vec![bangumi_rank_item(3)],
+            })
+            .expect("rank");
+        app.drain_network_events();
+        assert_eq!(rank_ids(&app), vec![3]);
+
+        event_tx
+            .send(NetworkEvent::BangumiTimelineLoaded {
+                req_id: stale_timeline,
+                types: TimelineType::Anime,
+                before: 3,
+                after: 3,
+                days: vec![timeline_day(10)],
+            })
+            .expect("stale timeline");
+        event_tx
+            .send(NetworkEvent::BangumiTimelineLoaded {
+                req_id: latest_timeline,
+                types: TimelineType::Movie,
+                before: 3,
+                after: 3,
+                days: vec![timeline_day(11)],
+            })
+            .expect("mismatched timeline type");
+        app.drain_network_events();
+        assert_eq!(timeline_days(&app), 0);
+
+        event_tx
+            .send(NetworkEvent::BangumiTimelineLoaded {
+                req_id: latest_timeline,
+                types: TimelineType::Anime,
+                before: 3,
+                after: 3,
+                days: vec![timeline_day(12)],
+            })
+            .expect("timeline");
+        app.drain_network_events();
+        assert_eq!(timeline_days(&app), 1);
+
+        event_tx
+            .send(NetworkEvent::SeasonIndexLoaded {
+                req_id: stale_index,
+                query: SeasonIndexQuery::default(),
+                append: false,
+                page: season_index_page(1, 1, &[1]),
+            })
+            .expect("stale index");
+        app.drain_network_events();
+        assert!(index_ids(&app).is_empty());
+
+        event_tx
+            .send(NetworkEvent::SeasonIndexLoaded {
+                req_id: latest_index,
+                query: SeasonIndexQuery::default(),
+                append: false,
+                page: season_index_page(1, 1, &[2]),
+            })
+            .expect("index");
+        app.drain_network_events();
+        assert_eq!(index_ids(&app), vec![2]);
+
+        event_tx
+            .send(NetworkEvent::SeasonIndexLoaded {
+                req_id: latest_index,
+                query: SeasonIndexQuery {
+                    page: 2,
+                    ..Default::default()
+                },
+                append: true,
+                page: season_index_page(2, 0, &[3]),
+            })
+            .expect("index append");
+        app.drain_network_events();
+        assert_eq!(index_ids(&app), vec![2, 3]);
+        assert!(matches!(
+            &app.current_page,
+            Page::Bangumi(page) if !page.index_has_next
         ));
     }
 }

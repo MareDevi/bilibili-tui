@@ -342,6 +342,8 @@ impl App {
                 page.videos.start_cover_downloads();
             }
             Page::Bangumi(page) => {
+                page.rank_grid.poll_cover_results();
+                page.rank_grid.start_cover_downloads();
                 page.index_grid.poll_cover_results();
                 page.index_grid.start_cover_downloads();
             }
