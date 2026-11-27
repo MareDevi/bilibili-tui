@@ -141,6 +141,11 @@ pub enum NetworkCommand {
         req_id: u64,
         season_id: i64,
     },
+    LoadBangumiComments {
+        req_id: u64,
+        aid: i64,
+        page: i32,
+    },
     SendLiveDanmaku {
         req_id: u64,
         room_id: i64,
@@ -285,6 +290,13 @@ pub enum NetworkEvent {
         season_id: i64,
         season: SeasonResult,
     },
+    BangumiCommentsLoaded {
+        req_id: u64,
+        aid: i64,
+        page: i32,
+        comments: Vec<CommentItem>,
+        has_more: bool,
+    },
     RequestFailed {
         req_id: u64,
         target: &'static str,
@@ -369,6 +381,7 @@ impl NetworkCommand {
             Self::LoadUpPage { .. } | Self::LoadUpVideos { .. } => "up",
             Self::LoadDynamicDetail { .. } => "dynamic_detail",
             Self::LoadBangumiIndex { .. } | Self::LoadBangumiDetail { .. } => "bangumi",
+            Self::LoadBangumiComments { .. } => "bangumi_comments",
         }
     }
 }
@@ -940,6 +953,31 @@ async fn handle_command(api_client: Arc<ApiClient>, command: NetworkCommand) -> 
                     }
                 }
                 Err(e) => failed(req_id, "bangumi_detail", e),
+            }
+        }
+        NetworkCommand::LoadBangumiComments { req_id, aid, page } => {
+            match api_client.get_comments(aid, page).await {
+                Ok(data) => {
+                    let comments = data.replies.unwrap_or_default();
+                    let page_size = data.page.as_ref().and_then(|p| p.size).unwrap_or(20).max(1);
+                    let loaded_so_far =
+                        page.saturating_sub(1).saturating_mul(page_size) + comments.len() as i32;
+                    let has_more = !comments.is_empty()
+                        && data
+                            .page
+                            .as_ref()
+                            .and_then(|p| p.count)
+                            .map(|count| loaded_so_far < count)
+                            .unwrap_or(true);
+                    NetworkEvent::BangumiCommentsLoaded {
+                        req_id,
+                        aid,
+                        page,
+                        comments,
+                        has_more,
+                    }
+                }
+                Err(e) => failed(req_id, "bangumi_comments", e),
             }
         }
     }

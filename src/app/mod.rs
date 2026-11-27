@@ -178,8 +178,47 @@ impl Default for App {
 mod tests {
     use super::{App, RequestTracker};
     use crate::application::AppAction;
+    use crate::application::network::{NetworkCommand, NetworkEvent};
     use crate::domain::playback::PlaybackEvent;
-    use crate::presentation::tui::{FavoritesPage, HomePage, NavItem, Page, VideoDetailPage};
+    use crate::presentation::tui::{
+        BangumiDetailPage, FavoritesPage, HomePage, NavItem, Page, VideoDetailPage,
+    };
+
+    fn bangumi_season(season_id: i64, episode_aid: i64) -> crate::api::bangumi::SeasonResult {
+        serde_json::from_value(serde_json::json!({
+            "title": "season",
+            "season_id": season_id,
+            "cover": "",
+            "square_cover": "",
+            "evaluate": null,
+            "link": null,
+            "episodes": [
+                {"aid": episode_aid, "cid": 1, "id": 101, "title": "1"}
+            ],
+            "section": null,
+            "rating": null,
+            "stat": null,
+            "badge": null,
+            "is_finish": null,
+            "index_show": null
+        }))
+        .expect("season fixture")
+    }
+
+    fn comment_fixture(rpid: i64) -> crate::api::comment::CommentItem {
+        serde_json::from_value(serde_json::json!({
+            "rpid": rpid,
+            "oid": 111,
+            "mid": 1,
+            "parent": 0,
+            "ctime": 1_700_000_000,
+            "like": 5,
+            "rcount": 2,
+            "member": {"uname": format!("user{}", rpid)},
+            "content": {"message": format!("评论 {}", rpid)}
+        }))
+        .expect("comment fixture")
+    }
 
     pub(super) fn minimal_app() -> (
         App,
@@ -443,5 +482,190 @@ mod tests {
             app.playback.status,
             crate::domain::playback::PlaybackStatus::Playing
         );
+    }
+
+    #[tokio::test]
+    async fn bangumi_detail_loaded_starts_first_comments_page_for_selected_episode() {
+        let (mut app, rx) = minimal_app();
+        let req_id = app.next_request_id("bangumi_detail");
+        app.current_page = Page::BangumiDetail(Box::new(BangumiDetailPage::new(7)));
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        app.network_event_rx = event_rx;
+        event_tx
+            .send(NetworkEvent::BangumiDetailLoaded {
+                req_id,
+                season_id: 7,
+                season: bangumi_season(7, 111),
+            })
+            .expect("send event");
+
+        app.drain_network_events();
+
+        match rx.try_recv() {
+            Ok(NetworkCommand::LoadBangumiComments { req_id, aid, page }) => {
+                assert_eq!((aid, page), (111, 1));
+                assert!(app.is_latest_request("bangumi_comments", req_id));
+            }
+            other => panic!("expected comments request, got {other:?}"),
+        }
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page)
+                if page.comments_aid == Some(111) && page.comments_loading
+        ));
+    }
+
+    #[tokio::test]
+    async fn stale_and_mismatched_bangumi_comment_events_are_ignored() {
+        let (mut app, _rx) = minimal_app();
+        let mut page = BangumiDetailPage::new(7);
+        page.set_season(bangumi_season(7, 111));
+        page.begin_comments_load(111, 1);
+        app.current_page = Page::BangumiDetail(Box::new(page));
+        let stale_id = app.next_request_id("bangumi_comments");
+        let latest_id = app.next_request_id("bangumi_comments");
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        app.network_event_rx = event_rx;
+
+        event_tx
+            .send(NetworkEvent::BangumiCommentsLoaded {
+                req_id: stale_id,
+                aid: 111,
+                page: 1,
+                comments: vec![comment_fixture(1)],
+                has_more: true,
+            })
+            .expect("send stale comments");
+        app.drain_network_events();
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page) if page.comments.is_empty() && page.comments_loading
+        ));
+
+        event_tx
+            .send(NetworkEvent::BangumiCommentsLoaded {
+                req_id: latest_id,
+                aid: 999,
+                page: 1,
+                comments: vec![comment_fixture(2)],
+                has_more: true,
+            })
+            .expect("send mismatched comments");
+        app.drain_network_events();
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page) if page.comments.is_empty()
+        ));
+
+        event_tx
+            .send(NetworkEvent::RequestFailed {
+                req_id: stale_id,
+                target: "bangumi_comments",
+                error: "stale".to_string(),
+            })
+            .expect("send stale failure");
+        app.drain_network_events();
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page)
+                if page.comments_error.is_none() && page.comments_loading
+        ));
+
+        event_tx
+            .send(NetworkEvent::RequestFailed {
+                req_id: latest_id,
+                target: "bangumi_comments",
+                error: "boom".to_string(),
+            })
+            .expect("send failure");
+        app.drain_network_events();
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page)
+                if page.comments_error.as_deref() == Some("加载评论失败: boom")
+                    && !page.comments_loading
+                    && !page.loading_more_comments
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_bangumi_comments_action_marks_loading_and_sends_command() {
+        let (mut app, rx) = minimal_app();
+        let mut page = BangumiDetailPage::new(7);
+        page.set_season(bangumi_season(7, 111));
+        app.current_page = Page::BangumiDetail(Box::new(page));
+
+        app.handle_action(AppAction::LoadBangumiComments { aid: 111, page: 2 })
+            .await;
+
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page) if page.loading_more_comments
+        ));
+        match rx.try_recv() {
+            Ok(NetworkCommand::LoadBangumiComments { req_id, aid, page }) => {
+                assert_eq!((aid, page), (111, 2));
+                assert!(app.is_latest_request("bangumi_comments", req_id));
+            }
+            other => panic!("expected comments request, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_season_jump_returns_to_previous_season_then_list() {
+        let mut app = App::new();
+        app.previous_page = Some(super::PreviousPage::Bangumi);
+        app.current_page = Page::BangumiDetail(Box::new(BangumiDetailPage::new(7)));
+        let stale_comments_id = app.next_request_id("bangumi_comments");
+
+        app.handle_action(AppAction::OpenBangumiDetail(8)).await;
+
+        assert_eq!(app.navigation_stack.len(), 1);
+        assert!(matches!(
+            &app.navigation_stack[0],
+            Page::BangumiDetail(page) if page.season_id == 7
+        ));
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page) if page.season_id == 8
+        ));
+        assert!(!app.is_latest_request("bangumi_comments", stale_comments_id));
+        assert!(matches!(
+            app.previous_page,
+            Some(super::PreviousPage::Bangumi)
+        ));
+
+        app.handle_action(AppAction::BackToList).await;
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page) if page.season_id == 7
+        ));
+        assert!(app.navigation_stack.is_empty());
+        assert!(matches!(
+            app.previous_page,
+            Some(super::PreviousPage::Bangumi)
+        ));
+
+        app.handle_action(AppAction::BackToList).await;
+        assert!(matches!(app.current_page, Page::Bangumi(_)));
+    }
+
+    #[tokio::test]
+    async fn opening_bangumi_detail_from_list_caches_list_without_stack_push() {
+        let (mut app, _rx) = minimal_app();
+        app.current_page = Page::Bangumi(Box::default());
+
+        app.handle_action(AppAction::OpenBangumiDetail(9)).await;
+
+        assert!(app.cached_bangumi.is_some());
+        assert!(app.navigation_stack.is_empty());
+        assert!(matches!(
+            app.previous_page,
+            Some(super::PreviousPage::Bangumi)
+        ));
+        assert!(matches!(
+            &app.current_page,
+            Page::BangumiDetail(page) if page.season_id == 9
+        ));
     }
 }

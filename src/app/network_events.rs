@@ -413,11 +413,42 @@ impl App {
                 if !self.is_latest_request("bangumi_detail", req_id) {
                     return;
                 }
+                let mut comments_aid = None;
                 if let Page::BangumiDetail(page) = &mut self.current_page {
                     if page.season_id != season_id {
                         return;
                     }
                     page.set_season(season);
+                    let aid = page.selected_episode_aid();
+                    if aid > 0 {
+                        page.begin_comments_load(aid, 1);
+                        comments_aid = Some(aid);
+                    }
+                }
+                if let Some(aid) = comments_aid {
+                    let req_id = self.next_request_id("bangumi_comments");
+                    self.send_network_command(network::NetworkCommand::LoadBangumiComments {
+                        req_id,
+                        aid,
+                        page: 1,
+                    });
+                }
+            }
+            network::NetworkEvent::BangumiCommentsLoaded {
+                req_id,
+                aid,
+                page: page_num,
+                comments,
+                has_more,
+            } => {
+                if !self.is_latest_request("bangumi_comments", req_id) {
+                    return;
+                }
+                if let Page::BangumiDetail(page) = &mut self.current_page {
+                    if page.comments_aid != Some(aid) {
+                        return;
+                    }
+                    page.apply_comments(aid, page_num, comments, has_more);
                 }
             }
             network::NetworkEvent::RequestFailed {
@@ -494,6 +525,9 @@ impl App {
                     }
                     (Page::BangumiDetail(page), "bangumi_detail") => {
                         page.set_error(format!("加载番剧详情失败: {}", error));
+                    }
+                    (Page::BangumiDetail(page), "bangumi_comments") => {
+                        page.set_comments_error(format!("加载评论失败: {}", error));
                     }
                     _ => {}
                 }

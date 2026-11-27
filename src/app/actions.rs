@@ -1000,12 +1000,27 @@ impl App {
                 // Single tab mode, no-op
             }
             AppAction::OpenBangumiDetail(season_id) => {
-                self.save_previous_page();
-                if let Page::Bangumi(bangumi_page) = std::mem::replace(
-                    &mut self.current_page,
-                    Page::Bangumi(Box::<BangumiPage>::default()),
-                ) {
-                    self.cached_bangumi = Some(*bangumi_page);
+                // Invalidate comments that belong to the season being left.
+                self.next_request_id("bangumi_comments");
+                if matches!(self.current_page, Page::Bangumi(_)) {
+                    self.save_previous_page();
+                    if let Page::Bangumi(bangumi_page) = std::mem::replace(
+                        &mut self.current_page,
+                        Page::Bangumi(Box::<BangumiPage>::default()),
+                    ) {
+                        self.cached_bangumi = Some(*bangumi_page);
+                    }
+                } else if matches!(self.current_page, Page::BangumiDetail(_)) {
+                    // Nested season jump: keep the previous season reachable via Esc.
+                    if let Page::BangumiDetail(previous_page) = std::mem::replace(
+                        &mut self.current_page,
+                        Page::Bangumi(Box::<BangumiPage>::default()),
+                    ) {
+                        self.navigation_stack
+                            .push(Page::BangumiDetail(previous_page));
+                    }
+                } else {
+                    self.save_previous_page();
                 }
                 let detail_page = BangumiDetailPage::new(season_id);
                 self.current_page = Page::BangumiDetail(Box::new(detail_page));
@@ -1013,6 +1028,20 @@ impl App {
                 self.send_network_command(network::NetworkCommand::LoadBangumiDetail {
                     req_id,
                     season_id,
+                });
+            }
+            AppAction::LoadBangumiComments { aid, page } => {
+                if aid <= 0 || !matches!(self.current_page, Page::BangumiDetail(_)) {
+                    return;
+                }
+                if let Page::BangumiDetail(detail) = &mut self.current_page {
+                    detail.begin_comments_load(aid, page);
+                }
+                let req_id = self.next_request_id("bangumi_comments");
+                self.send_network_command(network::NetworkCommand::LoadBangumiComments {
+                    req_id,
+                    aid,
+                    page,
                 });
             }
             AppAction::LoadMoreBangumi => {

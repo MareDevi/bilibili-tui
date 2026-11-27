@@ -164,6 +164,11 @@ pub enum AppAction {
         season_id: i64,
         title: String,
     },
+    /// Load a page of bangumi episode comments (aid, page)
+    LoadBangumiComments {
+        aid: i64,
+        page: i32,
+    },
     /// No action
     None,
 }
