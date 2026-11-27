@@ -996,9 +996,19 @@ impl App {
             }
             AppAction::RefreshBangumi => {
                 self.sidebar.select(NavItem::Bangumi);
-                self.cached_bangumi = None;
-                self.current_page = Page::Bangumi(Box::<BangumiPage>::default());
-                self.init_current_page().await;
+                let active_tab = if let Page::Bangumi(page) = &self.current_page {
+                    Some(page.tab)
+                } else {
+                    None
+                };
+                match active_tab {
+                    Some(tab) => self.request_bangumi_tab(tab, true),
+                    None => {
+                        self.cached_bangumi = None;
+                        self.current_page = Page::Bangumi(Box::<BangumiPage>::default());
+                        self.init_current_page().await;
+                    }
+                }
             }
             AppAction::SwitchBangumiTab(tab) => {
                 self.request_bangumi_tab(tab, false);
@@ -1007,7 +1017,7 @@ impl App {
                 if let Page::Bangumi(page) = &mut self.current_page {
                     page.rank_day = day;
                     page.rank_season_type = season_type;
-                    page.begin_load();
+                    page.begin_load(BangumiTab::Rank);
                 } else {
                     return;
                 }
@@ -1029,7 +1039,7 @@ impl App {
                     page.timeline_type = types;
                     page.timeline_before = before;
                     page.timeline_after = after;
-                    page.begin_load();
+                    page.begin_load(BangumiTab::Timeline);
                 } else {
                     return;
                 }
@@ -1044,18 +1054,16 @@ impl App {
             AppAction::LoadSeasonIndex { query, append } => {
                 let effective = if let Page::Bangumi(page) = &mut self.current_page {
                     if append {
-                        if !page.index_has_next || page.loading_more {
+                        if !page.index_has_next || page.index_loading || page.index_loading_more {
                             return;
                         }
-                        page.loading_more = true;
+                        page.begin_index_load_more();
                         let mut next = query;
                         next.page = page.index_loaded_page + 1;
                         Some(next)
                     } else {
                         page.season_index_query = query;
-                        page.index_loaded_page = 0;
-                        page.index_has_next = true;
-                        page.begin_load();
+                        page.begin_load(BangumiTab::Index);
                         Some(page.season_index_query.clone())
                     }
                 } else {
@@ -1148,7 +1156,7 @@ impl App {
                 });
             }
             AppAction::LoadMoreBangumi => {
-                self.request_season_index_page(true);
+                self.request_index_next_page();
             }
             AppAction::PlayBangumiEpisode {
                 ep_id,
@@ -1456,8 +1464,15 @@ impl App {
     fn request_bangumi_tab(&mut self, tab: BangumiTab, force: bool) {
         let request = if let Page::Bangumi(page) = &mut self.current_page {
             page.set_tab(tab);
-            if force || page.tab_needs_load() {
-                page.begin_load();
+            let should_request = force || page.tab_needs_load();
+            if should_request {
+                if force {
+                    page.force_reload(tab);
+                } else {
+                    page.begin_load(tab);
+                }
+            }
+            if should_request {
                 Some((
                     page.rank_day,
                     page.rank_season_type,
@@ -1504,20 +1519,16 @@ impl App {
         }
     }
 
-    fn request_season_index_page(&mut self, append: bool) {
+    /// Requests the next season index page, deduplicated by the page model.
+    fn request_index_next_page(&mut self) {
         let query = if let Page::Bangumi(page) = &mut self.current_page {
-            if append {
-                if !page.index_has_next || page.loading_more {
-                    return;
-                }
-                page.loading_more = true;
-                let mut next = page.season_index_query.clone();
-                next.page = page.index_loaded_page + 1;
-                next
-            } else {
-                page.begin_load();
-                page.season_index_query.clone()
+            if !page.index_has_next || page.index_loading || page.index_loading_more {
+                return;
             }
+            page.begin_index_load_more();
+            let mut next = page.season_index_query.clone();
+            next.page = page.index_loaded_page + 1;
+            next
         } else {
             return;
         };
@@ -1525,7 +1536,7 @@ impl App {
         self.send_network_command(network::NetworkCommand::LoadSeasonIndex {
             req_id,
             query,
-            append,
+            append: true,
         });
     }
 

@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::application::network;
+use crate::application::{BangumiTab, network};
 use crate::presentation::tui::{Page, VideoCard};
 
 impl App {
@@ -407,10 +407,7 @@ impl App {
                     return;
                 }
                 if let Page::Bangumi(page) = &mut self.current_page {
-                    if page.rank_day != day || page.rank_season_type != season_type {
-                        return;
-                    }
-                    page.set_rank_items(items);
+                    page.apply_rank(day, season_type, items);
                 }
             }
             network::NetworkEvent::BangumiTimelineLoaded {
@@ -424,13 +421,7 @@ impl App {
                     return;
                 }
                 if let Page::Bangumi(page) = &mut self.current_page {
-                    if page.timeline_type != types
-                        || page.timeline_before != before
-                        || page.timeline_after != after
-                    {
-                        return;
-                    }
-                    page.set_timeline_days(days);
+                    page.apply_timeline(types, before, after, days);
                 }
             }
             network::NetworkEvent::SeasonIndexLoaded {
@@ -443,10 +434,7 @@ impl App {
                     return;
                 }
                 if let Page::Bangumi(page) = &mut self.current_page {
-                    if !page.accepts_season_index_query(&query) {
-                        return;
-                    }
-                    page.set_season_index_page(index_page, append);
+                    page.apply_season_index_page(&query, append, index_page);
                 }
             }
             network::NetworkEvent::BangumiDetailLoaded {
@@ -562,13 +550,16 @@ impl App {
                         page.set_error(format!("加载专栏失败: {error}"));
                     }
                     (Page::Bangumi(page), "bangumi_rank") => {
-                        page.set_error(format!("加载番剧排行失败: {}", error));
+                        page.fail(BangumiTab::Rank, format!("加载番剧排行失败: {}", error));
                     }
                     (Page::Bangumi(page), "bangumi_timeline") => {
-                        page.set_error(format!("加载番剧时间表失败: {}", error));
+                        page.fail(
+                            BangumiTab::Timeline,
+                            format!("加载番剧时间表失败: {}", error),
+                        );
                     }
                     (Page::Bangumi(page), "bangumi_index") => {
-                        page.set_error(format!("加载番剧索引失败: {}", error));
+                        page.fail(BangumiTab::Index, format!("加载番剧索引失败: {}", error));
                     }
                     (Page::BangumiDetail(page), "bangumi_detail") => {
                         page.set_error(format!("加载番剧详情失败: {}", error));

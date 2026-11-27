@@ -178,8 +178,8 @@ impl Default for App {
 mod tests {
     use super::{App, RequestTracker};
     use crate::api::bangumi::{
-        BangumiRankDay, BangumiSeasonType, SeasonIndexPage, SeasonIndexQuery, TimelineDay,
-        TimelineType,
+        BangumiRankDay, BangumiSeasonType, SeasonIndexOrder, SeasonIndexPage, SeasonIndexQuery,
+        SeasonIndexSort, TimelineDay, TimelineType,
     };
     use crate::application::network::{NetworkCommand, NetworkEvent};
     use crate::application::{AppAction, BangumiTab};
@@ -888,5 +888,181 @@ mod tests {
             &app.current_page,
             Page::Bangumi(page) if !page.index_has_next
         ));
+    }
+
+    fn non_minimal_app() -> (
+        App,
+        std::sync::mpsc::Receiver<crate::application::network::NetworkCommand>,
+    ) {
+        let (mut app, rx) = minimal_app();
+        app.config.minimal_mode = false;
+        app.sidebar.set_minimal_mode(false);
+        (app, rx)
+    }
+
+    #[tokio::test]
+    async fn bangumi_empty_rank_counts_as_loaded_on_tab_switch() {
+        let (mut app, rx) = non_minimal_app();
+        app.current_page = Page::Bangumi(Box::default());
+        if let Page::Bangumi(page) = &mut app.current_page {
+            page.rank_season_type = BangumiSeasonType::Variety;
+            // 综艺 returns code=0 with zero items; that is still "loaded".
+            assert!(page.apply_rank(
+                BangumiRankDay::ThreeDays,
+                BangumiSeasonType::Variety,
+                Vec::new(),
+            ));
+            assert!(page.rank_loaded);
+        }
+
+        app.handle_action(AppAction::SwitchBangumiTab(BangumiTab::Timeline))
+            .await;
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(NetworkCommand::LoadBangumiTimeline { .. })
+        ));
+
+        // Switching back to a loaded (even if empty) tab must not refetch.
+        app.handle_action(AppAction::SwitchBangumiTab(BangumiTab::Rank))
+            .await;
+        assert!(rx.try_recv().is_err());
+        match &app.current_page {
+            Page::Bangumi(page) => {
+                assert_eq!(page.tab, BangumiTab::Rank);
+                assert!(page.rank_loaded);
+                assert!(page.rank_season_ids.is_empty());
+                assert!(!page.rank_loading);
+            }
+            _ => panic!("expected bangumi page"),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_bangumi_reloads_active_tab_in_place() {
+        let (mut app, rx) = non_minimal_app();
+        app.current_page = Page::Bangumi(Box::default());
+        if let Page::Bangumi(page) = &mut app.current_page {
+            page.set_tab(BangumiTab::Rank);
+            page.rank_day = BangumiRankDay::Week;
+            page.rank_season_type = BangumiSeasonType::Movie;
+            assert!(page.apply_rank(
+                BangumiRankDay::Week,
+                BangumiSeasonType::Movie,
+                vec![bangumi_rank_item(4)],
+            ));
+        }
+
+        app.handle_action(AppAction::RefreshBangumi).await;
+        match rx.try_recv() {
+            Ok(NetworkCommand::LoadBangumiRank {
+                day, season_type, ..
+            }) => {
+                assert_eq!(day, BangumiRankDay::Week);
+                assert_eq!(season_type, BangumiSeasonType::Movie);
+            }
+            other => panic!("expected rank refresh, got {other:?}"),
+        }
+        match &app.current_page {
+            Page::Bangumi(page) => {
+                assert_eq!(page.tab, BangumiTab::Rank);
+                assert_eq!(page.rank_season_ids, vec![4]);
+                assert!(page.rank_loading);
+            }
+            _ => panic!("expected bangumi page"),
+        }
+
+        // Index refresh keeps every filter but restarts at page 1.
+        if let Page::Bangumi(page) = &mut app.current_page {
+            page.set_tab(BangumiTab::Index);
+            page.season_index_query.order = SeasonIndexOrder::UpdateTime;
+            page.season_index_query.sort = SeasonIndexSort::Asc;
+            page.season_index_query.page = 3;
+            page.index_loaded_page = 3;
+        }
+        app.handle_action(AppAction::RefreshBangumi).await;
+        match rx.try_recv() {
+            Ok(NetworkCommand::LoadSeasonIndex { query, append, .. }) => {
+                assert!(!append);
+                assert_eq!(query.page, 1);
+                assert_eq!(query.order, SeasonIndexOrder::UpdateTime);
+                assert_eq!(query.sort, SeasonIndexSort::Asc);
+            }
+            other => panic!("expected index refresh, got {other:?}"),
+        }
+        match &app.current_page {
+            Page::Bangumi(page) => {
+                assert_eq!(page.tab, BangumiTab::Index);
+                assert!(page.index_loading);
+                assert_eq!(page.index_loaded_page, 0);
+            }
+            _ => panic!("expected bangumi page"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bangumi_back_navigation_restores_tab_filters_and_selection() {
+        let (mut app, _rx) = non_minimal_app();
+        app.current_page = Page::Bangumi(Box::default());
+        if let Page::Bangumi(page) = &mut app.current_page {
+            page.set_tab(BangumiTab::Index);
+            page.season_index_query.order = SeasonIndexOrder::UpdateTime;
+            page.season_index_query.area = "2".to_string();
+            let query = page.season_index_query.clone();
+            assert!(page.apply_season_index_page(&query, false, season_index_page(1, 1, &[5, 6])));
+            page.index_grid.selected_index = 1;
+        }
+
+        app.handle_action(AppAction::OpenBangumiDetail(6)).await;
+        assert!(app.cached_bangumi.is_some());
+
+        app.handle_action(AppAction::BackToList).await;
+        match &app.current_page {
+            Page::Bangumi(page) => {
+                assert_eq!(page.tab, BangumiTab::Index);
+                assert_eq!(page.season_index_query.order, SeasonIndexOrder::UpdateTime);
+                assert_eq!(page.season_index_query.area, "2");
+                assert_eq!(page.index_season_ids, vec![5, 6]);
+                assert_eq!(page.index_grid.selected_index, 1);
+                assert!(page.index_loaded);
+                assert!(page.index_has_next);
+            }
+            _ => panic!("expected restored bangumi page"),
+        }
+        assert!(app.cached_bangumi.is_none());
+    }
+
+    #[tokio::test]
+    async fn bangumi_load_more_respects_has_next_and_inflight_state() {
+        let (mut app, rx) = non_minimal_app();
+        app.current_page = Page::Bangumi(Box::default());
+        if let Page::Bangumi(page) = &mut app.current_page {
+            page.set_tab(BangumiTab::Index);
+            page.index_has_next = false;
+        }
+        app.handle_action(AppAction::LoadMoreBangumi).await;
+        assert!(rx.try_recv().is_err());
+
+        if let Page::Bangumi(page) = &mut app.current_page {
+            page.index_has_next = true;
+            page.index_loading_more = true;
+        }
+        app.handle_action(AppAction::LoadMoreBangumi).await;
+        assert!(rx.try_recv().is_err());
+
+        if let Page::Bangumi(page) = &mut app.current_page {
+            page.index_loading_more = false;
+            page.index_loaded_page = 1;
+        }
+        app.handle_action(AppAction::LoadMoreBangumi).await;
+        match rx.try_recv() {
+            Ok(NetworkCommand::LoadSeasonIndex { query, append, .. }) => {
+                assert!(append);
+                assert_eq!(query.page, 2);
+            }
+            other => panic!("expected index page request, got {other:?}"),
+        }
+        // The request is now in flight; a second Down near the bottom waits.
+        app.handle_action(AppAction::LoadMoreBangumi).await;
+        assert!(rx.try_recv().is_err());
     }
 }
